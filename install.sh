@@ -22,6 +22,15 @@ command -v curl >/dev/null 2>&1 || die "curl is required"
 command -v tar  >/dev/null 2>&1 || die "tar is required"
 command -v unzip >/dev/null 2>&1 || die "unzip is required"
 
+# --- data-safety invariant --------------------------------------------------
+# Install/update ONLY ever replace the two installed-artifact dirs below.
+# Everything else under $KERMES_HOME — config (API key), memory, skills,
+# vectors, checkpoints, inbox, schedules — is USER DATA and is never removed.
+# These guards make that impossible to get wrong (e.g. an empty var → rm /).
+[ -n "${KERMES_HOME:-}" ]            || die "KERMES_HOME is unset; refusing to continue"
+[ "$APP_DIR" = "$KERMES_HOME/app" ]  || die "unexpected APP_DIR ($APP_DIR); refusing to remove it"
+[ "$JRE_DIR" = "$KERMES_HOME/jre" ]  || die "unexpected JRE_DIR ($JRE_DIR); refusing to remove it"
+
 # --- resolve a Java 17+ runtime --------------------------------------------
 JAVA_HOME_OVERRIDE=""
 java_major() { "$1" -version 2>&1 | head -n1 | grep -oE '[0-9]+' | head -n1; }
