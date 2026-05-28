@@ -105,4 +105,38 @@ object Banner {
         sb.append("  ${DIM}Tip: `kermes -q \"…\"` runs a single prompt and exits.$RESET\n")
         return sb.toString()
     }
+
+    /**
+     * First-run / not-configured home screen: wordmark + mascot + getting-started
+     * commands. Shown when there's no API key yet (needs no config to render).
+     */
+    fun welcome(): String {
+        val sb = StringBuilder()
+        sb.append('\n')
+        wordmark.forEachIndexed { i, line ->
+            sb.append("  ").append(if (i >= 4) DRED else RED).append(line).append(RESET).append('\n')
+        }
+        sb.append('\n')
+
+        val right = listOf(
+            "$BOLD${WHITE}Welcome to Kermes$RESET ${DIM}— a Kotlin/JVM agent on Koog.$RESET",
+            "${DIM}Skill-aware, self-improving, provider-agnostic.$RESET",
+            "",
+            "${GOLD}Getting started$RESET",
+            "  ${GOLD}kermes setup$RESET   ${WHITE}provider + API key$RESET   $RED← start here$RESET",
+            "  ${GOLD}kermes$RESET          ${WHITE}start chatting$RESET",
+            "  ${GOLD}kermes -q \"…\"$RESET   ${WHITE}run one prompt and exit$RESET",
+            "  ${GOLD}kermes status$RESET   ${WHITE}check config + health$RESET",
+            "  ${GOLD}kermes help$RESET     ${WHITE}all commands$RESET",
+        )
+        val leftW = pacman.maxOf { it.length }
+        val rows = maxOf(pacman.size, right.size)
+        for (i in 0 until rows) {
+            val l = pacman.getOrElse(i) { "" }
+            val lOut = "$RED${l.padEnd(leftW)}$RESET"
+            sb.append("  ").append(lOut).append("   ").append(right.getOrElse(i) { "" }).append('\n')
+        }
+        sb.append('\n')
+        return sb.toString()
+    }
 }

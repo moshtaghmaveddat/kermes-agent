@@ -45,17 +45,25 @@ fun main(args: Array<String>) = runBlocking {
             is Cli.Command.Chat -> runChat(cmd.query)
         }
     } catch (e: KermesConfigError) {
-        // Clean, no stack trace — guide the user to setup.
-        System.err.println(
-            """
-            ${Banner.RED}✗${Banner.RESET} ${e.message}
-
-            Get started:
-              ${Banner.GOLD}kermes setup${Banner.RESET}              configure your provider + API key
-              ${Banner.GOLD}export KERMES_API_KEY=sk-...${Banner.RESET}   (or set it directly)
-            """.trimIndent()
-        )
-        kotlin.system.exitProcess(1)
+        // Not configured yet — show the home screen and offer to set up.
+        print(Banner.welcome())
+        val interactive = System.console() != null
+        if (interactive) {
+            print("  ${Banner.RED}✗${Banner.RESET} ${e.message} Run setup now? ${Banner.DIM}[Y/n]${Banner.RESET} ")
+            System.out.flush()
+            when (readlnOrNull()?.trim()?.lowercase()) {
+                null, "", "y", "yes" -> {
+                    println()
+                    Cli.runSetup()
+                    println("\n  Setup done. Run ${Banner.GOLD}kermes${Banner.RESET} to start chatting.")
+                }
+                else -> println("  No problem — run ${Banner.GOLD}kermes setup${Banner.RESET} whenever you're ready.")
+            }
+        } else {
+            // Non-interactive (piped/scripted): terse + non-zero exit.
+            System.err.println("kermes: ${e.message} Run `kermes setup` or set KERMES_API_KEY.")
+            kotlin.system.exitProcess(1)
+        }
     }
 }
 
