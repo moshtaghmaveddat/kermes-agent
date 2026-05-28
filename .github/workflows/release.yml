@@ -1,0 +1,50 @@
+name: release
+
+# Publishes a `kermes.zip` distribution to a GitHub Release.
+# Trigger by pushing a tag like `v0.1.0`, or run manually from the Actions tab.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed to create the release + upload assets
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run tests
+        run: ./gradlew test --no-daemon
+
+      - name: Build distribution
+        run: ./gradlew :kermes-app:distZip --no-daemon
+
+      - name: Normalize asset name
+        run: |
+          set -euo pipefail
+          src="$(find kermes-app/build/distributions -name '*.zip' | head -n1)"
+          test -n "$src"
+          cp "$src" kermes.zip
+          echo "Packaged: $src -> kermes.zip"
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: kermes.zip
+          generate_release_notes: true
+          # For workflow_dispatch (no tag) this still attaches to a release named after the run.
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('snapshot-{0}', github.run_number) }}
+          name: ${{ github.ref_type == 'tag' && github.ref_name || format('snapshot-{0}', github.run_number) }}
