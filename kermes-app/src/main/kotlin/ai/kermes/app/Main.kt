@@ -38,6 +38,7 @@ fun main(args: Array<String>) = runBlocking {
         Cli.Command.Help -> Cli.printUsage()
         Cli.Command.Version -> Cli.printVersion()
         Cli.Command.Init -> Cli.runInit()
+        Cli.Command.Setup -> Cli.runSetup()
         Cli.Command.Status -> Cli.runStatus()
         is Cli.Command.Chat -> runChat(cmd.query)
     }
@@ -118,7 +119,16 @@ private suspend fun runChat(oneShot: String?) {
     // ---- Scheduler (optional; runs alongside the REPL) -------------------
     val entries = ScheduleStore(config.schedulesFile).load()
     val scheduler = if (entries.isNotEmpty()) {
-        val sink = CompositeSink(mapOf("inbox" to InboxFileSink(config.inboxRoot)))
+        val sinks = buildMap<String, ai.kermes.schedule.DeliverySink> {
+            put("inbox", InboxFileSink(config.inboxRoot))
+            val tgToken = ConfigSource.get("KERMES_TELEGRAM_BOT_TOKEN")
+            val tgChat = ConfigSource.get("KERMES_TELEGRAM_CHAT_ID")
+            if (tgToken != null && tgChat != null) {
+                put("telegram", ai.kermes.schedule.TelegramSink(tgToken, tgChat))
+                log.info("telegram delivery enabled (chat {})", tgChat)
+            }
+        }
+        val sink = CompositeSink(sinks)
         Scheduler(
             agentRunner = { entry -> agent.run(entry.prompt, "schedule-${entry.id}") },
             sink = sink,

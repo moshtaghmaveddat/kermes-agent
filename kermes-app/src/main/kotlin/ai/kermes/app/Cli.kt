@@ -27,6 +27,7 @@ object Cli {
         data object Help : Command
         data object Version : Command
         data object Init : Command
+        data object Setup : Command
         data object Status : Command
         /** query == null → interactive REPL; non-null → one-shot. */
         data class Chat(val query: String?) : Command
@@ -37,6 +38,7 @@ object Cli {
         "help", "--help", "-h" -> Command.Help
         "version", "--version", "-v" -> Command.Version
         "init" -> Command.Init
+        "setup" -> Command.Setup
         "status" -> Command.Status
         "chat" -> Command.Chat(null)
         "-q", "--query" -> Command.Chat(args.drop(1).joinToString(" ").ifBlank { null })
@@ -47,8 +49,7 @@ object Cli {
         }
     }
 
-    private fun kermesHome(): Path =
-        Paths.get(System.getProperty("user.home")).resolve(".kermes")
+    private fun kermesHome(): Path = ai.kermes.app.kermesHome()
 
     fun printUsage() = println(
         """
@@ -57,6 +58,7 @@ object Cli {
         USAGE
           kermes                     Start the interactive REPL
           kermes -q "<prompt>"       One-shot: run a single prompt and print the reply
+          kermes setup               Interactive setup (LLM provider, API key, Telegram)
           kermes init                Bootstrap ~/.kermes (dirs, sample skill, schedules)
           kermes status              Show config + health (no network calls)
           kermes version             Print version
@@ -112,13 +114,90 @@ object Cli {
         )
     }
 
+    /**
+     * Interactive setup wizard. Writes ~/.kermes/config (dotenv-style) with the
+     * LLM provider, API key, model, and optional Telegram delivery settings.
+     * Reads from /dev/tty so it works even under `curl … | bash`.
+     */
+    fun runSetup() {
+        runInit()  // ensure dirs exist first
+
+        val tty = openTty()
+        fun ask(prompt: String, default: String? = null, secret: Boolean = false): String {
+            val suffix = if (default != null) " [$default]" else ""
+            print("$prompt$suffix: ")
+            System.out.flush()
+            val raw = if (secret) readSecret(tty) else (tty?.readLine() ?: readlnOrNull())
+            val v = raw?.trim().orEmpty()
+            return v.ifEmpty { default ?: "" }
+        }
+
+        println("\n── Kermes setup ─────────────────────────────")
+        println("Configure your LLM provider. Press Enter to accept [defaults].\n")
+
+        val provider = ask("Provider (openrouter / openai / ollama / custom)", "openrouter").lowercase()
+        val (defBase, defModel) = when (provider) {
+            "openai" -> "https://api.openai.com/v1" to "gpt-4o"
+            "ollama" -> "http://localhost:11434/v1" to "llama3.1"
+            "custom" -> "" to "gpt-4o"
+            else -> "https://openrouter.ai/api/v1" to "openai/gpt-4o"
+        }
+        val baseUrl = ask("Base URL", defBase)
+        val model = ask("Model id", defModel)
+        val apiKey = if (provider == "ollama") ask("API key (blank for local Ollama)", "ollama")
+                     else ask("API key", secret = true)
+
+        print("\nSet up Telegram delivery for scheduled tasks? (y/N): ")
+        val wantTg = (tty?.readLine() ?: readlnOrNull())?.trim()?.lowercase() == "y"
+        var tgToken = ""
+        var tgChat = ""
+        if (wantTg) {
+            println("Create a bot with @BotFather to get a token; message your bot, then")
+            println("get your chat id from https://api.telegram.org/bot<token>/getUpdates")
+            tgToken = ask("Telegram bot token", secret = true)
+            tgChat = ask("Telegram chat id")
+        }
+
+        val lines = buildList {
+            add("# Kermes config — written by `kermes setup`. Env vars override these.")
+            add("KERMES_BASE_URL=$baseUrl")
+            add("KERMES_MODEL=$model")
+            if (apiKey.isNotBlank()) add("KERMES_API_KEY=$apiKey")
+            if (tgToken.isNotBlank()) add("KERMES_TELEGRAM_BOT_TOKEN=$tgToken")
+            if (tgChat.isNotBlank()) add("KERMES_TELEGRAM_CHAT_ID=$tgChat")
+        }
+        ConfigSource.configFile.writeText(lines.joinToString("\n") + "\n")
+        // tighten perms — the file holds an API key
+        runCatching { ConfigSource.configFile.toFile().setReadable(false, false); ConfigSource.configFile.toFile().setReadable(true, true) }
+
+        println("\nSaved → ${ConfigSource.configFile}")
+        if (apiKey.isBlank()) println("(no API key entered — set KERMES_API_KEY or re-run setup before chatting)")
+        if (wantTg) println("Telegram: scheduled tasks with `deliver: telegram` will post to chat $tgChat.")
+        println("\nRun `kermes` to start.")
+    }
+
+    private fun openTty(): java.io.BufferedReader? = runCatching {
+        java.io.File("/dev/tty").takeIf { it.exists() }?.let { java.io.BufferedReader(java.io.FileReader(it)) }
+    }.getOrNull()
+
+    private fun readSecret(tty: java.io.BufferedReader?): String? {
+        val console = System.console()
+        return if (console != null) String(console.readPassword()) else (tty?.readLine() ?: readlnOrNull())
+    }
+
     /** Non-network health check. No API key required. */
     fun runStatus() {
         val home = kermesHome()
+        // Reflect what the agent will actually see: env → ~/.kermes/config.
         val keySet = sequenceOf("KERMES_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY")
-            .any { !System.getenv(it).isNullOrBlank() }
-        val model = System.getenv("KERMES_MODEL") ?: "openai/gpt-4o"
-        val baseUrl = System.getenv("KERMES_BASE_URL") ?: "https://openrouter.ai/api/v1"
+            .any { !ConfigSource.get(it).isNullOrBlank() }
+        val keySource = when {
+            sequenceOf("KERMES_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY").any { !System.getenv(it).isNullOrBlank() } -> "env"
+            keySet -> "config file"
+            else -> "none"
+        }
+        val model = ConfigSource.get("KERMES_MODEL") ?: "openai/gpt-4o"
+        val baseUrl = ConfigSource.get("KERMES_BASE_URL") ?: "https://openrouter.ai/api/v1"
 
         val roots = buildList {
             val proj = Paths.get("").toAbsolutePath().resolve(".kermes/skills")
@@ -141,7 +220,7 @@ object Cli {
             """
             Kermes $KERMES_VERSION — status
 
-              API key:     ${if (keySet) "set ✓" else "MISSING ✗  (set KERMES_API_KEY)"}
+              API key:     ${if (keySet) "set ✓ (from $keySource)" else "MISSING ✗  (run: kermes setup)"}
               model:       $model
               base URL:    $baseUrl
               home:        $home ${if (home.exists()) "✓" else "✗ (run: kermes init)"}
