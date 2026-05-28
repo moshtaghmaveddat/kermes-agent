@@ -120,4 +120,4 @@ zip as a release asset. Manual runs are available via the Actions tab.
 
 ## License
 
-TBD.
+[MIT](LICENSE) © 2026 Moshtagh Maveddat
