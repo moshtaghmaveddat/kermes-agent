@@ -1,0 +1,41 @@
+[versions]
+kotlin = "2.2.0"
+koog = "1.0.0"
+coroutines = "1.10.2"
+serialization = "1.8.0"
+kaml = "0.85.0"
+cronutils = "9.2.1"
+mordant = "3.0.2"
+slf4j = "2.0.16"
+logback = "1.5.18"
+junit = "5.11.4"
+
+[libraries]
+# Koog core + features
+koog-agents = { module = "ai.koog:koog-agents", version.ref = "koog" }
+koog-features-memory = { module = "ai.koog:agents-features-memory", version.ref = "koog" }
+
+# Kotlin stdlib + coroutines + serialization
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
+
+# YAML for SKILL.md frontmatter + schedule store + config
+kaml = { module = "com.charleskorn.kaml:kaml", version.ref = "kaml" }
+
+# Cron expression parsing for scheduler
+cron-utils = { module = "com.cronutils:cron-utils", version.ref = "cronutils" }
+
+# TUI rendering (colors, line editing)
+mordant = { module = "com.github.ajalt.mordant:mordant", version.ref = "mordant" }
+
+# Logging
+slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
+logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
+
+# Testing
+junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit" }
+junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
+
+[plugins]
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
