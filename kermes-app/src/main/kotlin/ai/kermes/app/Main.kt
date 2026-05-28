@@ -34,13 +34,27 @@ import kotlin.io.path.createDirectories
  * (currently the full manifest is injected statically, fine at MVP scale).
  */
 fun main(args: Array<String>) = runBlocking {
-    when (val cmd = Cli.parse(args)) {
-        Cli.Command.Help -> Cli.printUsage()
-        Cli.Command.Version -> Cli.printVersion()
-        Cli.Command.Init -> Cli.runInit()
-        Cli.Command.Setup -> Cli.runSetup()
-        Cli.Command.Status -> Cli.runStatus()
-        is Cli.Command.Chat -> runChat(cmd.query)
+    try {
+        when (val cmd = Cli.parse(args)) {
+            Cli.Command.Help -> Cli.printUsage()
+            Cli.Command.Version -> Cli.printVersion()
+            Cli.Command.Init -> Cli.runInit()
+            Cli.Command.Setup -> Cli.runSetup()
+            Cli.Command.Status -> Cli.runStatus()
+            is Cli.Command.Chat -> runChat(cmd.query)
+        }
+    } catch (e: KermesConfigError) {
+        // Clean, no stack trace — guide the user to setup.
+        System.err.println(
+            """
+            ${Banner.RED}✗${Banner.RESET} ${e.message}
+
+            Get started:
+              ${Banner.GOLD}kermes setup${Banner.RESET}              configure your provider + API key
+              ${Banner.GOLD}export KERMES_API_KEY=sk-...${Banner.RESET}   (or set it directly)
+            """.trimIndent()
+        )
+        kotlin.system.exitProcess(1)
     }
 }
 
@@ -146,7 +160,14 @@ private suspend fun runChat(oneShot: String?) {
     // ---- REPL ------------------------------------------------------------
     val session = Slash.Session("tui-main")
     log.info("ready. {} skills loaded, {} schedule(s).", skillRegistry.all().size, entries.size)
-    println("Kermes 0.1 — /help for commands, /quit to exit. ${skillRegistry.all().size} skills, ${entries.size} schedules.")
+    print(
+        Banner.render(
+            version = KERMES_VERSION,
+            model = config.modelId,
+            cwd = System.getProperty("user.dir"),
+            skills = skillRegistry.all().map { it.frontmatter.name },
+        )
+    )
 
     while (true) {
         print("\n> ")

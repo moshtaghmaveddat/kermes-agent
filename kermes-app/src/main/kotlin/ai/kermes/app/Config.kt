@@ -44,6 +44,9 @@ object ConfigSource {
 /**
  * MVP configuration. Resolved from [ConfigSource] (env → ~/.kermes/config).
  */
+/** Thrown when configuration is incomplete (e.g. no API key). Caught in main() for a clean message. */
+class KermesConfigError(message: String) : Exception(message)
+
 data class KermesConfig(
     val apiKey: String,
     val baseUrl: String,
@@ -83,7 +86,7 @@ data class KermesConfig(
                 apiKey = ConfigSource.get("KERMES_API_KEY")
                     ?: ConfigSource.get("OPENROUTER_API_KEY")
                     ?: ConfigSource.get("OPENAI_API_KEY")
-                    ?: error("No API key. Run `kermes setup`, or set KERMES_API_KEY."),
+                    ?: throw KermesConfigError("No API key configured."),
                 baseUrl = ConfigSource.get("KERMES_BASE_URL") ?: "https://openrouter.ai/api/v1",
                 modelId = ConfigSource.get("KERMES_MODEL") ?: "openai/gpt-4o",
                 embeddingsModelId = ConfigSource.get("KERMES_EMBEDDINGS_MODEL") ?: "openai/text-embedding-3-small",
