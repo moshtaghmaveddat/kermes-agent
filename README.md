@@ -16,16 +16,18 @@ per-turn, not token-by-token).
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/moshtaghmaveddat/kermes/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/moshtaghmaveddat/kermes-agent/main/install.sh | bash
 ```
 
-Requires **Java 17+** on your PATH. The installer downloads the latest release,
-installs under `~/.kermes/app`, symlinks `kermes` into `~/.local/bin`, and runs
-`kermes init`. Then:
+No prerequisites beyond `curl` + `tar`/`unzip` — the installer **auto-provisions
+a Java 17+ runtime** (Eclipse Temurin) if you don't already have one, downloads
+the latest release into `~/.kermes/app`, and writes a `kermes` launcher into
+`~/.local/bin`. Then:
 
 ```bash
-export KERMES_API_KEY=sk-...   # OpenRouter or OpenAI key
-kermes                          # start chatting
+kermes setup     # configure provider + API key (+ optional Telegram)
+kermes           # start chatting
+# (or skip the wizard: export KERMES_API_KEY=sk-... )
 ```
 
 ## Commands
@@ -33,6 +35,7 @@ kermes                          # start chatting
 ```
 kermes                  start the interactive REPL
 kermes -q "<prompt>"    one-shot: run a single prompt and print the reply
+kermes setup            interactive setup (provider, API key, Telegram)
 kermes init             bootstrap ~/.kermes (dirs, sample skill, schedules)
 kermes status           show config + health (no network)
 kermes version          print version

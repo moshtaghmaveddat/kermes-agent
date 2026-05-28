@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Kermes installer.
-#   curl -fsSL https://raw.githubusercontent.com/moshtaghmaveddat/kermes/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/moshtaghmaveddat/kermes-agent/main/install.sh | bash
 #
 # - Auto-provisions a Java 17+ runtime (Eclipse Temurin) if one isn't present,
 #   so nothing needs to be preinstalled except curl + tar/unzip.
@@ -9,7 +9,7 @@
 #   writes a `kermes` launcher into ~/.local/bin, and runs `kermes init`.
 set -euo pipefail
 
-REPO="${KERMES_REPO:-moshtaghmaveddat/kermes}"
+REPO="${KERMES_REPO:-moshtaghmaveddat/kermes-agent}"
 KERMES_HOME="${KERMES_HOME:-$HOME/.kermes}"
 APP_DIR="$KERMES_HOME/app"
 JRE_DIR="$KERMES_HOME/jre"
