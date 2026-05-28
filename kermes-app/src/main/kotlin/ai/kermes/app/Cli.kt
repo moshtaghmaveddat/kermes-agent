@@ -13,7 +13,7 @@ import kotlin.io.path.name
 import kotlin.io.path.walk
 import kotlin.io.path.writeText
 
-const val KERMES_VERSION = "0.1.1"
+const val KERMES_VERSION = "0.1.2"
 
 /**
  * Terminal command surface. Three categories:
@@ -29,9 +29,13 @@ object Cli {
         data object Init : Command
         data object Setup : Command
         data object Status : Command
+        data object Update : Command
         /** query == null → interactive REPL; non-null → one-shot. */
         data class Chat(val query: String?) : Command
     }
+
+    /** Canonical repo, used by `kermes update` to re-run the installer. */
+    const val REPO_SLUG = "moshtaghmaveddat/kermes-agent"
 
     fun parse(args: Array<String>): Command = when (args.firstOrNull()) {
         null -> Command.Chat(null)
@@ -40,6 +44,7 @@ object Cli {
         "init" -> Command.Init
         "setup" -> Command.Setup
         "status" -> Command.Status
+        "update" -> Command.Update
         "chat" -> Command.Chat(null)
         "-q", "--query" -> Command.Chat(args.drop(1).joinToString(" ").ifBlank { null })
         else -> {
@@ -61,6 +66,7 @@ object Cli {
           kermes setup               Interactive setup (LLM provider, API key, Telegram)
           kermes init                Bootstrap ~/.kermes (dirs, sample skill, schedules)
           kermes status              Show config + health (no network calls)
+          kermes update              Update to the latest release (re-runs the installer)
           kermes version             Print version
           kermes help                Show this help
 
@@ -76,6 +82,32 @@ object Cli {
     )
 
     fun printVersion() = println("kermes $KERMES_VERSION")
+
+    /**
+     * Update in place by re-running the installer, which downloads the latest
+     * release and replaces ~/.kermes/app. The installer is the single source of
+     * truth for install/update logic (JRE provisioning, download, launcher).
+     * Safe to self-update: the running JVM keeps its already-loaded jars; the
+     * new version takes effect on the next launch.
+     */
+    fun runUpdate() {
+        val url = "https://raw.githubusercontent.com/$REPO_SLUG/main/install.sh"
+        println("Updating Kermes (current v$KERMES_VERSION) — re-running the installer…\n")
+        val manual = "  curl -fsSL $url | bash"
+        try {
+            val exit = ProcessBuilder("bash", "-c", "curl -fsSL \"$url\" | bash")
+                .inheritIO()
+                .start()
+                .waitFor()
+            if (exit == 0) {
+                println("\nUpdate complete. Run `kermes version` to confirm.")
+            } else {
+                System.err.println("\nUpdate failed (exit $exit). Update manually:\n$manual")
+            }
+        } catch (e: Exception) {
+            System.err.println("Could not launch the updater (${e.message}). Update manually:\n$manual")
+        }
+    }
 
     /** Bootstrap the home directory. No API key required. */
     @OptIn(kotlin.io.path.ExperimentalPathApi::class)

@@ -38,6 +38,7 @@ kermes -q "<prompt>"    one-shot: run a single prompt and print the reply
 kermes setup            interactive setup (provider, API key, Telegram)
 kermes init             bootstrap ~/.kermes (dirs, sample skill, schedules)
 kermes status           show config + health (no network)
+kermes update           update to the latest release (re-runs the installer)
 kermes version          print version
 kermes help             usage
 
