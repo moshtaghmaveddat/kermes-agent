@@ -13,7 +13,7 @@ import kotlin.io.path.name
 import kotlin.io.path.walk
 import kotlin.io.path.writeText
 
-const val KERMES_VERSION = "0.1.11"
+const val KERMES_VERSION = "0.1.12"
 
 /**
  * Terminal command surface. Three categories:
@@ -107,17 +107,21 @@ object Cli {
      */
     fun runUpdate() {
         val url = "https://raw.githubusercontent.com/$REPO_SLUG/main/install.sh"
+        // Retry transient TLS drops (curl 35), and `pipefail` so a failed curl
+        // isn't masked by bash exiting 0 on empty stdin (which falsely reported
+        // "Update complete" while leaving the old version in place).
+        val curlRetry = "--retry 5 --retry-all-errors --retry-delay 1 --connect-timeout 20"
+        val manual = "  curl -fsSL $curlRetry $url | bash"
         println("Updating Kermes (current v$KERMES_VERSION) — re-running the installer…\n")
-        val manual = "  curl -fsSL $url | bash"
         try {
-            val exit = ProcessBuilder("bash", "-c", "curl -fsSL \"$url\" | bash")
+            val exit = ProcessBuilder("bash", "-c", "set -o pipefail; curl -fsSL $curlRetry \"$url\" | bash")
                 .inheritIO()
                 .start()
                 .waitFor()
             if (exit == 0) {
                 println("\nUpdate complete. Run `kermes version` to confirm.")
             } else {
-                System.err.println("\nUpdate failed (exit $exit). Update manually:\n$manual")
+                System.err.println("\nUpdate failed (exit $exit) — likely a network/TLS hiccup. Try again, or update manually:\n$manual")
             }
         } catch (e: Exception) {
             System.err.println("Could not launch the updater (${e.message}). Update manually:\n$manual")

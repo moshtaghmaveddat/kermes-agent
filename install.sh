@@ -22,6 +22,11 @@ command -v curl >/dev/null 2>&1 || die "curl is required"
 command -v tar  >/dev/null 2>&1 || die "tar is required"
 command -v unzip >/dev/null 2>&1 || die "unzip is required"
 
+# Retry transient network/TLS failures — raw.githubusercontent.com and the
+# release CDN intermittently drop TLS handshakes (curl 35 SSL_ERROR_SYSCALL).
+# --retry-all-errors (curl 7.71+) also retries those; older curl ignores it.
+CURL_RETRY="--retry 5 --retry-all-errors --retry-delay 1 --connect-timeout 20"
+
 # --- data-safety invariant --------------------------------------------------
 # Install/update ONLY ever replace the two installed-artifact dirs below.
 # Everything else under $KERMES_HOME — config (API key), memory, skills,
@@ -75,7 +80,7 @@ if [ -z "$JAVA_HOME_OVERRIDE" ]; then
   JRE_URL="https://api.adoptium.net/v3/binary/latest/21/ga/$OS/$ARCH/jre/hotspot/normal/eclipse"
   TMP_JRE="$(mktemp -t kermes-jre.XXXXXX.tar.gz)"
   trap 'rm -f "${TMP_JRE:-}"' EXIT
-  curl -fSL "$JRE_URL" -o "$TMP_JRE" || die "JRE download failed"
+  curl -fSL $CURL_RETRY "$JRE_URL" -o "$TMP_JRE" || die "JRE download failed"
   rm -rf "$JRE_DIR"; mkdir -p "$JRE_DIR"
   tar -xzf "$TMP_JRE" -C "$JRE_DIR" --strip-components=1
   # macOS bundles live under Contents/Home
@@ -97,7 +102,7 @@ TMP_ZIP="$(mktemp -t kermes.XXXXXX.zip)"
 trap 'rm -f "${TMP_JRE:-}" "$TMP_ZIP"' EXIT
 
 say "Downloading $ASSET_URL"
-curl -fSL "$ASSET_URL" -o "$TMP_ZIP" || die "Download failed. Has a release been published for $REPO yet?"
+curl -fSL $CURL_RETRY "$ASSET_URL" -o "$TMP_ZIP" || die "Download failed. Has a release been published for $REPO yet?"
 
 say "Installing into $APP_DIR"
 rm -rf "$APP_DIR"; mkdir -p "$APP_DIR"
