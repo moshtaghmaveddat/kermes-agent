@@ -12,6 +12,7 @@ import ai.koog.prompt.executor.clients.retry.RetryConfig
 import ai.koog.prompt.executor.clients.retry.RetryingLLMClient
 import ai.koog.prompt.executor.llms.MultiLLMPromptExecutor
 import ai.koog.prompt.executor.model.PromptExecutor
+import ai.koog.prompt.executor.ollama.client.OllamaClient
 import ai.koog.prompt.llm.LLModel
 import java.nio.file.Path
 
@@ -21,31 +22,64 @@ import java.nio.file.Path
  */
 object KoogWiring {
 
+    /** Which provider family a base URL points at — decides client + API dialect. */
+    private enum class Provider { OPENAI, OLLAMA, CHAT_COMPLETIONS }
+
+    /**
+     * Infer the provider from the base URL. We key off the URL (rather than a
+     * stored provider name) so existing configs keep working: Ollama always
+     * listens on :11434, OpenAI on api.openai.com, everything else is treated
+     * as an OpenAI-compatible Chat-Completions server (OpenRouter, vLLM, …).
+     */
+    private fun providerOf(baseUrl: String): Provider {
+        val u = baseUrl.lowercase()
+        return when {
+            "api.openai.com" in u -> Provider.OPENAI
+            "11434" in u || "ollama" in u -> Provider.OLLAMA
+            else -> Provider.CHAT_COMPLETIONS
+        }
+    }
+
+    /**
+     * Ollama's native client wants the bare host (it appends `/api/chat`,
+     * `/api/tags`, …) — NOT the `/v1` OpenAI-compat shim. Strip the trailing
+     * version segment that the rest of the app stores in its base URL.
+     */
+    private fun ollamaBase(baseUrl: String): String =
+        baseUrl.trimEnd('/').removeSuffix("/v1").removeSuffix("/api")
+            .ifBlank { "http://localhost:11434" }
+
     /**
      * Build a provider-appropriate client from the base URL.
      *
-     * Koog's `OpenAILLMClient` speaks the OpenAI **Responses API** (`/responses`),
-     * which only OpenAI implements. OpenRouter, Ollama, and most "OpenAI-
-     * compatible" servers only speak **Chat Completions** (`/chat/completions`) —
-     * so for everything except api.openai.com we use `OpenRouterLLMClient`
-     * (a chat-completions client) with the base URL overridden.
+     * - **Ollama** → the native `OllamaClient` (correct API, correct name in
+     *   logs/errors, and a path to local embeddings later). It speaks Ollama's
+     *   native protocol, not the OpenAI shim.
+     * - **OpenAI** → `OpenAILLMClient`, which speaks the OpenAI **Responses
+     *   API** (`/responses`) that only api.openai.com implements.
+     * - **Everything else** → `OpenRouterLLMClient`, a **Chat Completions**
+     *   (`/chat/completions`) client, with the base URL overridden. This covers
+     *   OpenRouter and any OpenAI-compatible server.
      */
     private fun buildClient(apiKey: String, baseUrl: String): LLMClient =
-        if (baseUrl.contains("api.openai.com")) {
-            OpenAILLMClient(apiKey, OpenAIClientSettings(baseUrl = baseUrl))
-        } else {
-            // The base URL already includes the version segment (…/v1 or …/api/v1),
-            // so paths are single-segment relative. (OpenRouter's defaults hardcode
-            // `api/v1/…`, which would double up against our base → 404.)
-            OpenRouterLLMClient(
-                apiKey.ifBlank { "none" },
-                OpenRouterClientSettings(
-                    baseUrl = baseUrl,
-                    chatCompletionsPath = "chat/completions",
-                    modelsPath = "models",
-                    embeddingsPath = "embeddings",
-                ),
-            )
+        when (providerOf(baseUrl)) {
+            Provider.OPENAI ->
+                OpenAILLMClient(apiKey, OpenAIClientSettings(baseUrl = baseUrl))
+            Provider.OLLAMA ->
+                OllamaClient(baseUrl = ollamaBase(baseUrl))
+            Provider.CHAT_COMPLETIONS ->
+                // The base URL already includes the version segment (…/v1 or …/api/v1),
+                // so paths are single-segment relative. (OpenRouter's defaults hardcode
+                // `api/v1/…`, which would double up against our base → 404.)
+                OpenRouterLLMClient(
+                    apiKey.ifBlank { "none" },
+                    OpenRouterClientSettings(
+                        baseUrl = baseUrl,
+                        chatCompletionsPath = "chat/completions",
+                        modelsPath = "models",
+                        embeddingsPath = "embeddings",
+                    ),
+                )
         }
 
     /** Prompt executor: provider client wrapped in retry. */

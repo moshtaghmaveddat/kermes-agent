@@ -114,7 +114,11 @@ object KoogAgentFactory {
             llmModel = model,
             systemPrompt = SessionLearner.SYSTEM_PROMPT,
             temperature = 0.0,
-            maxIterations = 1,
+            // Tool-less, so a single LLM turn is enough — but Koog's single-run
+            // strategy spends >1 iteration unit to emit + finalize the message,
+            // so maxIterations=1 throws AIAgentMaxNumberOfIterationsReached. Give
+            // it a small budget; with no tools it still finishes in one turn.
+            maxIterations = 5,
         )
 
     private fun systemPrompt(skillManifest: String, eagerMemory: String): String = buildString {

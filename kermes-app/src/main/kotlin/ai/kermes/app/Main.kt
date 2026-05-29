@@ -133,7 +133,7 @@ private suspend fun runChat(oneShot: String?) {
             println(agent.run(oneShot, "oneshot"))
         } catch (e: Exception) {
             log.error("one-shot run failed", e)
-            println("ERROR: ${e.message}")
+            println("ERROR: ${friendlyError(e, config)}")
         }
         vectors.flush()
         return
@@ -197,9 +197,7 @@ private suspend fun runChat(oneShot: String?) {
                 .append("Assistant: ").append(response).append("\n\n")
         } catch (e: Exception) {
             log.error("agent run failed", e)   // full detail → ~/.kermes/kermes.log
-            val short = e.message?.lineSequence()?.firstOrNull { it.isNotBlank() }?.take(200)
-                ?: (e::class.simpleName ?: "unknown error")
-            println("  ${Banner.RED}✗${Banner.RESET} $short")
+            println("  ${Banner.RED}✗${Banner.RESET} ${friendlyError(e, config)}")
             println("  ${Banner.DIM}details in ~/.kermes/kermes.log${Banner.RESET}")
         }
     }
@@ -214,6 +212,37 @@ private suspend fun runChat(oneShot: String?) {
     scheduler?.close()
     vectors.flush()
     println("bye.")
+}
+
+/**
+ * Map a raw LLM/client exception to a short, actionable line for the REPL.
+ * The underlying Koog message ("Error from client: OpenRouterLLMClient") is
+ * useless to an end user — translate the common provider failures into a fix.
+ */
+private fun friendlyError(e: Throwable, config: KermesConfig): String {
+    val text = generateSequence(e) { it.cause }.joinToString("\n") { it.message ?: "" }.lowercase()
+    val model = config.modelId
+    val base = config.baseUrl
+    return when {
+        "does not support tools" in text || "support tools" in text ->
+            "Model '$model' can't do tool-calling, which Kermes requires. " +
+                "Switch to a tool-capable model (e.g. qwen2.5, llama3.1, mistral-nemo) — " +
+                "run `kermes setup` or set KERMES_MODEL."
+
+        "model not found" in text || "try pulling" in text ||
+            ("404" in text && "not found" in text) ->
+            "Model '$model' isn't available at $base. For Ollama, run `ollama pull $model` first."
+
+        "connection refused" in text || "failed to connect" in text ||
+            "connectexception" in text || "no route to host" in text ->
+            "Can't reach the LLM server at $base. Is it running? For Ollama: `ollama serve`."
+
+        "401" in text || "unauthorized" in text || "invalid api key" in text ->
+            "The API key was rejected by $base. Re-run `kermes setup` to update it."
+
+        else -> e.message?.lineSequence()?.firstOrNull { it.isNotBlank() }?.take(200)
+            ?: (e::class.simpleName ?: "unknown error")
+    }
 }
 
 /** Eager (Tier-1) memory: identity + preferences injected into every prompt. */
