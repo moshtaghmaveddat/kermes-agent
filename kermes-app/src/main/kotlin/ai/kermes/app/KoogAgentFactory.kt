@@ -134,10 +134,25 @@ object KoogAgentFactory {
             - bash for shell commands and web_search for lookups.
 
             When a user task matches a skill, call load_skill(name) first to load
-            its instructions before acting. Persist anything you learn about the
-            user, their preferences, or their environment via the appropriate
-            memory tool. Some tools require user approval; if a call is denied,
-            explain and adapt rather than retrying blindly.
+            its instructions before acting. Some tools require user approval; if a
+            call is denied, explain and adapt rather than retrying blindly.
+
+            Memory discipline — be proactive and precise:
+            - The moment the user states or corrects a durable fact about
+              themselves, call the matching memory tool BEFORE you reply, then
+              confirm it in your reply:
+                * name / its spelling / role / stack / location → remember_user
+                * a rule or style ("always", "prefer", "from now on") → set_preference
+                * their environment, projects, tooling → remember_context
+                * a correction to your own behavior → note_feedback
+            - Corrections and alternate spellings ARE durable facts. If the user
+              says "actually it's X", gives a translation, or a different spelling
+              of something you already know, persist the new value (remember_user
+              overwrites a trait — use the same trait key, e.g. "name").
+            - Never call a memory tool just to ANSWER a question. The user's
+              identity and preferences are already given below — read them. Use
+              `recall` only for past episodes/context, and don't re-save a value
+              that hasn't changed.
             """.trimIndent()
         )
         if (skillManifest.isNotBlank()) {
