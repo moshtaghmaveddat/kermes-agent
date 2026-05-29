@@ -13,7 +13,7 @@ import kotlin.io.path.name
 import kotlin.io.path.walk
 import kotlin.io.path.writeText
 
-const val KERMES_VERSION = "0.1.5"
+const val KERMES_VERSION = "0.1.6"
 
 /**
  * Terminal command surface. Three categories:
@@ -152,6 +152,17 @@ object Cli {
      * Reads from /dev/tty so it works even under `curl … | bash`.
      */
     fun runSetup() {
+        // Setup is an interactive wizard — refuse without a real terminal so it
+        // never silently writes a config from piped/scripted input.
+        val interactive = System.console() != null ||
+            (java.io.File("/dev/tty").exists() && sttyState() != null)
+        if (!interactive) {
+            System.err.println(
+                "kermes setup needs an interactive terminal. " +
+                "Set KERMES_API_KEY (or OPENROUTER_API_KEY) directly instead."
+            )
+            return
+        }
         runInit()  // ensure dirs exist first
 
         val tty = openTty()
