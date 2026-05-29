@@ -49,6 +49,32 @@ Rules:
 - If there is nothing else worth saving, emit only the EPISODE line.
 - Output nothing but fact lines. No prose, no code fences, no headings.
 """
+
+        /**
+         * Per-turn extractor prompt. Runs after EVERY exchange (async) and is the
+         * single writer of durable facts — so the chat model doesn't need memory
+         * tools or prompt babysitting. No EPISODE here (that's a session-end
+         * summary); emit NONE when the turn holds nothing durable.
+         */
+        const val TURN_SYSTEM_PROMPT: String = """
+You watch one exchange between a user and an assistant and capture ONLY durable,
+reusable facts about the user — so the assistant remembers them next time.
+Output ONLY fact lines, one per line, using EXACTLY these pipe-delimited formats:
+
+USER|<trait>|<value>     — stable identity facts (name, its spelling, role, stack, timezone, location)
+PREF|<key>|<value>       — preferences/rules ("prefers concise answers", "always use Kotlin")
+CONTEXT|<topic>|<fact>   — durable facts about their environment/projects/tools
+FEEDBACK||<observation>  — a correction the user gave about the assistant's behavior
+
+Rules:
+- A CORRECTION or an ALTERNATE SPELLING/translation of a known fact IS durable —
+  emit it with the SAME key so it overwrites (e.g. USER|name|Moshtagh (Persian: مشتاق)).
+- Capture only what the USER revealed in THIS exchange. Ignore the assistant's words.
+- Skip ephemeral chit-chat, questions, and one-off task requests. No secrets/tokens.
+- Do NOT emit EPISODE lines here.
+- If nothing durable was revealed, output exactly: NONE
+- Output nothing but fact lines (or NONE). No prose, no code fences, no headings.
+"""
     }
 
     data class Summary(val written: Int, val skipped: Int, val errors: Int)

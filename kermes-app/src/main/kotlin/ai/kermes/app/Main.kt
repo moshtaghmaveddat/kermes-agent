@@ -1,8 +1,8 @@
 package ai.kermes.app
 
 import ai.kermes.core.feature.PermissionGuard
-import ai.kermes.core.memory.LearnerToolSet
 import ai.kermes.core.memory.MemoryStore
+import ai.kermes.core.memory.RecallToolSet
 import ai.kermes.core.skill.SkillRegistry
 import ai.kermes.core.skill.SkillsToolSet
 import ai.kermes.core.vector.KoogVectorStore
@@ -17,7 +17,12 @@ import ai.kermes.tools.WebSearchToolSet
 import ai.koog.agents.core.agent.GraphAIAgent
 import ai.koog.prompt.executor.model.PromptExecutor
 import ai.koog.prompt.llm.LLModel
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.slf4j.LoggerFactory
 import java.nio.file.Paths
@@ -146,6 +151,8 @@ private suspend fun runChat(oneShot: String?) {
 
     // ---- REPL ------------------------------------------------------------
     val session = Slash.Session("tui-main")
+    // Background scope for fire-and-forget per-turn memory extraction.
+    val learnScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     log.info("ready. {} skills loaded, {} schedule(s).", skillRegistry.all().size, entries.size)
     print(
         Banner.render(
@@ -173,6 +180,8 @@ private suspend fun runChat(oneShot: String?) {
             println(response)
             transcript.append("User: ").append(line).append('\n')
                 .append("Assistant: ").append(response).append("\n\n")
+            // Capture durable facts from this exchange, off the reply path.
+            stack.learnTurnAsync(learnScope, line, response)
         } catch (e: Exception) {
             log.error("agent run failed", e)   // full detail → ~/.kermes/kermes.log
             println("  ${Banner.RED}✗${Banner.RESET} ${friendlyError(e, config)}")
@@ -180,13 +189,15 @@ private suspend fun runChat(oneShot: String?) {
         }
     }
 
-    // Self-learn from the session before shutting down.
+    // Session end: record a single EPISODE summary (per-turn facts are already
+    // captured live above). The episode extractor uses the full-session prompt.
     if (transcript.isNotBlank()) {
         print("\nlearning from this session… ")
         val s = sessionLearner.learn(transcript.toString())
         println("saved ${s.written} memory item(s).")
     }
 
+    learnScope.cancel()
     scheduler?.close()
     vectors.flush()
     println("bye.")
@@ -205,7 +216,17 @@ private class AgentStack(
     val skillRegistry: SkillRegistry,
     val executor: PromptExecutor,
     val model: LLModel,
-)
+    /** Out-of-band per-turn fact extractor — the single writer of durable memory. */
+    val turnLearner: SessionLearner,
+) {
+    /**
+     * Capture durable facts from one exchange. Fire-and-forget on [scope] so the
+     * reply is never blocked; failures are swallowed (logged inside the learner).
+     */
+    fun learnTurnAsync(scope: CoroutineScope, userMsg: String, assistantMsg: String) {
+        scope.launch { turnLearner.learn("User: $userMsg\nAssistant: $assistantMsg\n") }
+    }
+}
 
 private suspend fun buildAgentStack(config: KermesConfig, permissionGuard: PermissionGuard): AgentStack {
     val executor = KoogWiring.buildPromptExecutor(config.apiKey, config.baseUrl)
@@ -219,7 +240,7 @@ private suspend fun buildAgentStack(config: KermesConfig, permissionGuard: Permi
     val skillRegistry = SkillRegistry(config.skillsRoots)
 
     val skillTools = SkillsToolSet(skillRegistry, config.agentCreatedSkillsRoot, permissionGuard)
-    val learnerTools = LearnerToolSet(memory, vectors)
+    val recallTools = RecallToolSet(vectors)   // read-only; the extractor owns writes
     val workdir = Paths.get(System.getProperty("user.dir"))
     val bashTools = BashToolSet(workdir = workdir, permissionGuard = permissionGuard)
     val webTools = WebSearchToolSet()
@@ -230,14 +251,19 @@ private suspend fun buildAgentStack(config: KermesConfig, permissionGuard: Permi
         model = model,
         config = config,
         skillTools = skillTools,
-        learnerTools = learnerTools,
+        recallTools = recallTools,
         bashTools = bashTools,
         webTools = webTools,
         fileTools = fileTools,
         skillManifest = skillRegistry.discoveryManifest(),
         eagerMemory = buildEagerMemory(memory),
     )
-    return AgentStack(agent, memory, vectors, skillRegistry, executor, model)
+
+    // Per-turn extractor: tool-less, low-temperature, no episodes.
+    val turnExtractor = KoogAgentFactory.buildExtractor(executor, model, SessionLearner.TURN_SYSTEM_PROMPT)
+    val turnLearner = SessionLearner(memory) { turn -> turnExtractor.run(turn, "extract-turn") }
+
+    return AgentStack(agent, memory, vectors, skillRegistry, executor, model, turnLearner)
 }
 
 /**
@@ -278,6 +304,7 @@ private suspend fun runServe(mcpPort: Int?) = coroutineScope {
 
     log.info("starting Kermes serve baseUrl={} model={}", config.baseUrl, config.modelId)
     val stack = buildAgentStack(config, permissionGuard)
+    val learnScope = this   // fire-and-forget per-turn extraction lives on the serve scope
 
     // Scheduler — same wiring as the REPL, just hosted here permanently.
     val entries = ScheduleStore(config.schedulesFile).load()
@@ -297,7 +324,11 @@ private suspend fun runServe(mcpPort: Int?) = coroutineScope {
     val gateway = TelegramGateway(
         botToken = tgToken,
         allowedChatIds = allowed,
-        onMessage = { chatId, text -> stack.agent.run(text, "telegram-$chatId") },
+        onMessage = { chatId, text ->
+            val reply = stack.agent.run(text, "telegram-$chatId")
+            stack.learnTurnAsync(learnScope, text, reply)   // capture facts off the reply path
+            reply
+        },
     )
     val botName = gateway.whoAmI()
 

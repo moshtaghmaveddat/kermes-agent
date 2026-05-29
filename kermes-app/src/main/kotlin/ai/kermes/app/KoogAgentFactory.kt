@@ -1,6 +1,6 @@
 package ai.kermes.app
 
-import ai.kermes.core.memory.LearnerToolSet
+import ai.kermes.core.memory.RecallToolSet
 import ai.kermes.core.skill.SkillsToolSet
 import ai.kermes.tools.BashToolSet
 import ai.kermes.tools.FileToolSet
@@ -47,7 +47,7 @@ object KoogAgentFactory {
         model: LLModel,
         config: KermesConfig,
         skillTools: SkillsToolSet,
-        learnerTools: LearnerToolSet,
+        recallTools: RecallToolSet,
         bashTools: BashToolSet,
         webTools: WebSearchToolSet,
         fileTools: FileToolSet,
@@ -57,7 +57,7 @@ object KoogAgentFactory {
 
         val toolRegistry = ToolRegistry {
             tools(skillTools)
-            tools(learnerTools)
+            tools(recallTools)
             tools(bashTools)
             tools(webTools)
             tools(fileTools)
@@ -108,11 +108,12 @@ object KoogAgentFactory {
     fun buildExtractor(
         promptExecutor: PromptExecutor,
         model: LLModel,
+        systemPrompt: String = SessionLearner.SYSTEM_PROMPT,
     ): GraphAIAgent<String, String> =
         AIAgent(
             promptExecutor = promptExecutor,
             llmModel = model,
-            systemPrompt = SessionLearner.SYSTEM_PROMPT,
+            systemPrompt = systemPrompt,
             temperature = 0.0,
             // Tool-less, so a single LLM turn is enough — but Koog's single-run
             // strategy spends >1 iteration unit to emit + finalize the message,
@@ -129,30 +130,19 @@ object KoogAgentFactory {
 
             - The skills engine — list_skills, load_skill, read_skill_file,
               run_skill_script. Skills follow the agentskills.io format.
-            - Memory tools — remember_user, set_preference, remember_context,
-              record_episode, note_feedback, recall, update_context.
-            - bash for shell commands and web_search for lookups.
+            - bash for shell commands, web_search for lookups, file tools, and
+              `recall` for looking up facts from earlier sessions.
 
             When a user task matches a skill, call load_skill(name) first to load
             its instructions before acting. Some tools require user approval; if a
             call is denied, explain and adapt rather than retrying blindly.
 
-            Memory discipline — be proactive and precise:
-            - The moment the user states or corrects a durable fact about
-              themselves, call the matching memory tool BEFORE you reply, then
-              confirm it in your reply:
-                * name / its spelling / role / stack / location → remember_user
-                * a rule or style ("always", "prefer", "from now on") → set_preference
-                * their environment, projects, tooling → remember_context
-                * a correction to your own behavior → note_feedback
-            - Corrections and alternate spellings ARE durable facts. If the user
-              says "actually it's X", gives a translation, or a different spelling
-              of something you already know, persist the new value (remember_user
-              overwrites a trait — use the same trait key, e.g. "name").
-            - Never call a memory tool just to ANSWER a question. The user's
-              identity and preferences are already given below — read them. Use
-              `recall` only for past episodes/context, and don't re-save a value
-              that hasn't changed.
+            Memory is automatic: after each exchange, durable facts the user
+            reveals (identity, preferences, environment) are extracted and saved
+            for you — you do NOT manage memory with tools. Just converse naturally
+            and acknowledge what the user tells you. What you already know about
+            the user is provided below; use `recall` only to look up older
+            episodes or context.
             """.trimIndent()
         )
         if (skillManifest.isNotBlank()) {
