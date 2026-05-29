@@ -13,7 +13,7 @@ import kotlin.io.path.name
 import kotlin.io.path.walk
 import kotlin.io.path.writeText
 
-const val KERMES_VERSION = "0.1.3"
+const val KERMES_VERSION = "0.1.4"
 
 /**
  * Terminal command surface. Three categories:
@@ -167,7 +167,15 @@ object Cli {
         println("\n── Kermes setup ─────────────────────────────")
         println("Configure your LLM provider. Press Enter to accept [defaults].\n")
 
-        val provider = ask("Provider (openrouter / openai / ollama / custom)", "openrouter").lowercase()
+        val providers = listOf(
+            "openrouter" to "OpenAI-compatible router · many models (recommended)",
+            "openai"     to "OpenAI API",
+            "ollama"     to "local models via Ollama",
+            "custom"     to "any OpenAI-compatible base URL",
+        )
+        val pick = arrowMenu("Select your LLM provider", providers)
+        val provider = if (pick >= 0) providers[pick].first
+                       else ask("Provider (openrouter / openai / ollama / custom)", "openrouter").lowercase()
         val (defBase, defModel) = when (provider) {
             "openai" -> "https://api.openai.com/v1" to "gpt-4o"
             "ollama" -> "http://localhost:11434/v1" to "llama3.1"
@@ -215,6 +223,69 @@ object Cli {
     private fun readSecret(tty: java.io.BufferedReader?): String? {
         val console = System.console()
         return if (console != null) String(console.readPassword()) else (tty?.readLine() ?: readlnOrNull())
+    }
+
+    // ---- arrow-key menu over /dev/tty ------------------------------------
+    private fun stty(args: String) {
+        runCatching { ProcessBuilder("sh", "-c", "stty $args < /dev/tty").inheritIO().start().waitFor() }
+    }
+    private fun sttyState(): String? = runCatching {
+        val p = ProcessBuilder("sh", "-c", "stty -g < /dev/tty").redirectErrorStream(true).start()
+        val s = p.inputStream.bufferedReader().readText().trim()
+        p.waitFor()
+        s.ifBlank { null }
+    }.getOrNull()
+
+    /**
+     * Vertical picker over /dev/tty: ↑/↓ (or k/j) to move, Enter to select.
+     * Returns the chosen index, or -1 when there's no usable TTY (caller falls
+     * back to a typed prompt). Always restores terminal state, even on Ctrl-C.
+     */
+    private fun arrowMenu(title: String, options: List<Pair<String, String>>): Int {
+        val ttyFile = java.io.File("/dev/tty")
+        if (!ttyFile.exists()) return -1
+        val saved = sttyState() ?: return -1            // not a real tty → fallback
+        val ins = runCatching { java.io.FileInputStream(ttyFile) }.getOrNull() ?: return -1
+        val out = System.out
+        var sel = 0
+        val hook = Thread { runCatching { stty(saved) }; out.print("[?25h"); out.flush() }
+        runCatching { Runtime.getRuntime().addShutdownHook(hook) }
+        try {
+            stty("-echo -icanon -isig min 1 time 0")
+            out.print("[?25l")                    // hide cursor
+            out.println("  ${Banner.GOLD}$title${Banner.RESET}  ${Banner.DIM}(↑/↓ then Enter)${Banner.RESET}")
+            fun draw(first: Boolean) {
+                if (!first) out.print("[${options.size}A")   // back to first row
+                options.forEachIndexed { i, (name, desc) ->
+                    out.print("[2K")                          // clear line
+                    if (i == sel)
+                        out.println("    ${Banner.RED}❯ ${name.padEnd(11)}${Banner.RESET} ${Banner.DIM}$desc${Banner.RESET}")
+                    else
+                        out.println("      ${Banner.WHITE}${name.padEnd(11)}${Banner.RESET} ${Banner.DIM}$desc${Banner.RESET}")
+                }
+                out.flush()
+            }
+            draw(true)
+            while (true) {
+                when (ins.read()) {
+                    -1 -> return sel                                 // EOF → accept current
+                    3 -> kotlin.system.exitProcess(130)              // Ctrl-C → abort (finally restores)
+                    13, 10 -> return sel                             // Enter
+                    27 -> if (ins.read() == 91) when (ins.read()) {  // ESC [ …
+                        65 -> { sel = (sel - 1 + options.size) % options.size; draw(false) }   // up
+                        66 -> { sel = (sel + 1) % options.size; draw(false) }                  // down
+                    }
+                    'k'.code -> { sel = (sel - 1 + options.size) % options.size; draw(false) }
+                    'j'.code -> { sel = (sel + 1) % options.size; draw(false) }
+                }
+            }
+        } finally {
+            stty(saved)
+            out.print("[?25h")                    // show cursor
+            out.flush()
+            runCatching { Runtime.getRuntime().removeShutdownHook(hook) }
+            runCatching { ins.close() }
+        }
     }
 
     /** Non-network health check. No API key required. */
