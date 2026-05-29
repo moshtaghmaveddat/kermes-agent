@@ -41,7 +41,16 @@ class KoogVectorStore(
     }
 
     override suspend fun upsert(doc: KermesDoc) {
-        val vector = embedder.embed(doc.text)
+        // Embeddings may be unavailable (e.g. Ollama with no local embed model).
+        // The caller's markdown files are the source of truth and eager memory is
+        // file-based, so degrade gracefully: skip indexing rather than failing the
+        // whole memory write. Only semantic `recall` is affected.
+        val vector = try {
+            embedder.embed(doc.text)
+        } catch (e: Exception) {
+            log.warn("embedding unavailable — '{}' saved but not indexed for semantic search ({})", doc.id, e.message)
+            return
+        }
         lock.withLock {
             rows[doc.id] = Row(
                 id = doc.id,
@@ -63,7 +72,14 @@ class KoogVectorStore(
     }
 
     override suspend fun query(text: String, topK: Int, tags: Set<DocTag>?): List<Hit> {
-        val queryVec = embedder.embed(text)
+        val queryVec = try {
+            embedder.embed(text)
+        } catch (e: Exception) {
+            // No embeddings → no semantic search. Eager memory (user/preferences
+            // injected into the prompt) still covers identity recall.
+            log.warn("embedding unavailable — semantic recall returned no results ({})", e.message)
+            return emptyList()
+        }
         val snapshot = lock.withLock { rows.values.toList() }
 
         val filtered = if (tags == null) {
