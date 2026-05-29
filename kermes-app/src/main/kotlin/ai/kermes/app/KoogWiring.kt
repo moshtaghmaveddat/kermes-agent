@@ -34,7 +34,18 @@ object KoogWiring {
         if (baseUrl.contains("api.openai.com")) {
             OpenAILLMClient(apiKey, OpenAIClientSettings(baseUrl = baseUrl))
         } else {
-            OpenRouterLLMClient(apiKey.ifBlank { "none" }, OpenRouterClientSettings(baseUrl = baseUrl))
+            // The base URL already includes the version segment (…/v1 or …/api/v1),
+            // so paths are single-segment relative. (OpenRouter's defaults hardcode
+            // `api/v1/…`, which would double up against our base → 404.)
+            OpenRouterLLMClient(
+                apiKey.ifBlank { "none" },
+                OpenRouterClientSettings(
+                    baseUrl = baseUrl,
+                    chatCompletionsPath = "chat/completions",
+                    modelsPath = "models",
+                    embeddingsPath = "embeddings",
+                ),
+            )
         }
 
     /** Prompt executor: provider client wrapped in retry. */
