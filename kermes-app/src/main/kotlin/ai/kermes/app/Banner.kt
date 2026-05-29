@@ -17,6 +17,16 @@ object Banner {
     val WHITE = c("[38;5;252m")
     private val BOLD = c("[1m")
 
+    // Truecolor gradient for the logo: CF4C4C (top) → B624FE (bottom), row i of n.
+    private fun grad(i: Int, n: Int): String {
+        if (!color) return ""
+        val t = if (n <= 1) 0.0 else i.toDouble() / (n - 1)
+        val r = (0xCF + t * (0xB6 - 0xCF)).toInt()
+        val g = (0x4C + t * (0x24 - 0x4C)).toInt()
+        val b = (0x4C + t * (0xFE - 0x4C)).toInt()
+        return "[38;2;$r;$g;${b}m"
+    }
+
     // KERMES — ANSI Shadow figlet.
     private val wordmark = listOf(
         "██╗░░██╗███████╗██████╗░███╗░░░███╗███████╗░██████╗",
@@ -54,14 +64,13 @@ object Banner {
         // ---- wordmark ----
         sb.append('\n')
         wordmark.forEachIndexed { i, line ->
-            val shade = if (i >= 4) DRED else RED
-            sb.append("  ").append(shade).append(line).append(RESET).append('\n')
+            sb.append("  ").append(grad(i, wordmark.size)).append(line).append(RESET).append('\n')
         }
         sb.append('\n')
 
         // ---- left column (pacman + meta) ----
         val left = buildList {
-            addAll(pacman.map { it to RED })
+            addAll(pacman.mapIndexed { i, line -> line to grad(i, pacman.size) })
             add("" to "")
             add(model to GOLD)
             add(cwd.let { if (it.length > 34) "…" + it.takeLast(33) else it } to DIM)
@@ -114,7 +123,7 @@ object Banner {
         val sb = StringBuilder()
         sb.append('\n')
         wordmark.forEachIndexed { i, line ->
-            sb.append("  ").append(if (i >= 4) DRED else RED).append(line).append(RESET).append('\n')
+            sb.append("  ").append(grad(i, wordmark.size)).append(line).append(RESET).append('\n')
         }
         sb.append('\n')
 
@@ -133,8 +142,9 @@ object Banner {
         val rows = maxOf(pacman.size, right.size)
         for (i in 0 until rows) {
             val l = pacman.getOrElse(i) { "" }
-            val lOut = "$RED${l.padEnd(leftW)}$RESET"
-            sb.append("  ").append(lOut).append("   ").append(right.getOrElse(i) { "" }).append('\n')
+            val lc = if (i < pacman.size) grad(i, pacman.size) else ""
+            sb.append("  ").append(lc).append(l.padEnd(leftW)).append(RESET)
+                .append("   ").append(right.getOrElse(i) { "" }).append('\n')
         }
         sb.append('\n')
         return sb.toString()

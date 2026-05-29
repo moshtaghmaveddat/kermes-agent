@@ -13,7 +13,7 @@ import kotlin.io.path.name
 import kotlin.io.path.walk
 import kotlin.io.path.writeText
 
-const val KERMES_VERSION = "0.1.6"
+const val KERMES_VERSION = "0.1.7"
 
 /**
  * Terminal command surface. Three categories:
@@ -197,11 +197,31 @@ object Cli {
 
         // Base URL is fixed by the provider — only ask when it's `custom`.
         val baseUrl = if (provider == "custom") ask("Base URL", defBase.ifBlank { null }) else defBase
-        val model = ask("Model", defModel)
+
+        // Hermes-style order: API key first, then choose the model.
         val apiKey = if (provider == "ollama") ask("API key (Enter to skip — local Ollama needs none)", "ollama")
                      else ask("API key", secret = true)
         if (apiKey.isNotBlank() && provider != "ollama")
-            println("  ${Banner.GOLD}✓${Banner.RESET} API key saved.")
+            println("  ${Banner.GOLD}✓${Banner.RESET} API key saved.\n")
+
+        val model: String = if (provider != "openrouter") {
+            ask("Model", defModel)
+        } else {
+            println("  ${Banner.DIM}Fetching models from OpenRouter…${Banner.RESET}")
+            val models = fetchOpenRouterModels(25)
+            if (models.isEmpty()) {
+                println("  ${Banner.DIM}(couldn't reach OpenRouter — type a model id)${Banner.RESET}")
+                ask("Model", defModel)
+            } else {
+                val opts = models.map { it to "" } + ("✎ other — type a custom model id" to "")
+                when (val mp = arrowMenu("Select a model", opts)) {
+                    in models.indices -> models[mp]
+                    models.size       -> ask("Model id", defModel)   // chose "other"
+                    else              -> ask("Model", defModel)       // no tty → typed fallback
+                }
+            }
+        }
+        println("  ${Banner.GOLD}✓${Banner.RESET} Model: ${Banner.WHITE}$model${Banner.RESET}")
 
         print("\nSet up Telegram delivery for scheduled tasks? (y/N): ")
         val wantTg = (tty?.readLine() ?: readlnOrNull())?.trim()?.lowercase() == "y"
@@ -275,15 +295,17 @@ object Cli {
         try {
             stty("-echo -icanon -isig min 1 time 0")
             out.print("[?25l")                    // hide cursor
-            out.println("  ${Banner.GOLD}$title${Banner.RESET}  ${Banner.DIM}(↑/↓ then Enter)${Banner.RESET}")
+            val total = if (options.size > 14) "  ${Banner.DIM}(${options.size} options)${Banner.RESET}" else ""
+            out.println("  ${Banner.GOLD}$title${Banner.RESET}  ${Banner.DIM}(↑/↓ then Enter)${Banner.RESET}$total")
+            val nameW = options.maxOf { it.first.length }.coerceIn(8, 34)
             fun draw(first: Boolean) {
                 if (!first) out.print("[${options.size}A")   // back to first row
                 options.forEachIndexed { i, (name, desc) ->
                     out.print("[2K")                          // clear line
                     if (i == sel)
-                        out.println("    ${Banner.RED}❯ ${name.padEnd(11)}${Banner.RESET} ${Banner.DIM}$desc${Banner.RESET}")
+                        out.println("    ${Banner.RED}❯ ${name.padEnd(nameW)}${Banner.RESET} ${Banner.DIM}$desc${Banner.RESET}")
                     else
-                        out.println("      ${Banner.WHITE}${name.padEnd(11)}${Banner.RESET} ${Banner.DIM}$desc${Banner.RESET}")
+                        out.println("      ${Banner.WHITE}${name.padEnd(nameW)}${Banner.RESET} ${Banner.DIM}$desc${Banner.RESET}")
                 }
                 out.flush()
             }
@@ -309,6 +331,19 @@ object Cli {
             runCatching { ins.close() }
         }
     }
+
+    /** Fetch up to [limit] model ids from OpenRouter's public /models endpoint. */
+    private fun fetchOpenRouterModels(limit: Int): List<String> = runCatching {
+        val client = java.net.http.HttpClient.newBuilder()
+            .connectTimeout(java.time.Duration.ofSeconds(8)).build()
+        val req = java.net.http.HttpRequest.newBuilder()
+            .uri(java.net.URI.create("https://openrouter.ai/api/v1/models"))
+            .header("Accept", "application/json").GET().build()
+        val resp = client.send(req, java.net.http.HttpResponse.BodyHandlers.ofString())
+        if (resp.statusCode() != 200) return@runCatching emptyList()
+        Regex("\"id\"\\s*:\\s*\"([^\"]+)\"").findAll(resp.body())
+            .map { it.groupValues[1] }.distinct().take(limit).toList()
+    }.getOrDefault(emptyList())
 
     /** Non-network health check. No API key required. */
     fun runStatus() {
