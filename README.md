@@ -1,5 +1,12 @@
 # Kermes
 
+> # ⚠️ NOT READY FOR USE
+>
+> **Kermes is an experimental project under active development.** It is
+> incomplete, unstable, and changes without notice. Expect breakage, missing
+> features, and rough edges. Do **not** rely on it for anything real — use it
+> only to explore or hack on. You have been warned.
+
 A Kotlin/JVM AI agent inspired by [Hermes Agent](https://github.com/NousResearch/hermes-agent), built on [Koog](https://github.com/JetBrains/koog).
 
 Skill-aware, self-improving, provider-agnostic, and runs anywhere the JVM runs.
@@ -7,7 +14,7 @@ See [KERMES.md](KERMES.md) for the full design, scope, and roadmap.
 
 ## Status
 
-**0.1 — working MVP.** Boots end-to-end against Koog 1.0. Loads agentskills.io
+**0.1 — experimental MVP, not production-ready.** Boots end-to-end against Koog 1.0. Loads agentskills.io
 skills, remembers you across sessions (and learns automatically at session end),
 gates dangerous tools behind approval, reads/writes files, searches the web, and
 runs scheduled tasks. The one deferral is TUI token-streaming (output is returned
