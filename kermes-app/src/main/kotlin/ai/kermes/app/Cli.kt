@@ -13,7 +13,7 @@ import kotlin.io.path.name
 import kotlin.io.path.walk
 import kotlin.io.path.writeText
 
-const val KERMES_VERSION = "0.1.13"
+const val KERMES_VERSION = "0.1.14"
 
 /**
  * Terminal command surface. Three categories:
@@ -249,7 +249,7 @@ object Cli {
         }
         println("  ${Banner.GOLD}✓${Banner.RESET} Model: ${Banner.WHITE}$model${Banner.RESET}")
 
-        print("\nSet up Telegram delivery for scheduled tasks? (y/N): ")
+        print("\nConnect Telegram? — chat with the agent + receive scheduled briefs (y/N): ")
         val wantTg = (tty?.readLine() ?: readlnOrNull())?.trim()?.lowercase() == "y"
         var tgToken = ""
         var tgChat = ""
@@ -281,7 +281,11 @@ object Cli {
         if (wantTg) println("    telegram   ${Banner.WHITE}chat $tgChat${Banner.RESET}")
         if (apiKey.isBlank())
             println("\n  ${Banner.RED}!${Banner.RESET} No API key — set KERMES_API_KEY or re-run `kermes setup` before chatting.")
-        println("\n  Run ${Banner.GOLD}kermes${Banner.RESET} to start.")
+        println("\n  Run ${Banner.GOLD}kermes${Banner.RESET} to start the chat.")
+        if (wantTg && tgToken.isNotBlank() && tgChat.isNotBlank()) {
+            println("  Run ${Banner.GOLD}kermes serve${Banner.RESET} to start the Telegram gateway " +
+                "${Banner.DIM}— leave it running, then message your bot.${Banner.RESET}")
+        }
     }
 
     private fun openTty(): java.io.BufferedReader? = runCatching {
