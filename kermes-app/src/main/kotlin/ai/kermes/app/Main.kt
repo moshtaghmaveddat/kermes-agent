@@ -5,13 +5,19 @@ import ai.kermes.core.memory.LearnerToolSet
 import ai.kermes.core.memory.MemoryStore
 import ai.kermes.core.skill.SkillRegistry
 import ai.kermes.core.skill.SkillsToolSet
+import ai.kermes.core.vector.KoogVectorStore
 import ai.kermes.schedule.CompositeSink
 import ai.kermes.schedule.InboxFileSink
 import ai.kermes.schedule.ScheduleStore
 import ai.kermes.schedule.Scheduler
+import ai.kermes.schedule.TelegramGateway
 import ai.kermes.tools.BashToolSet
 import ai.kermes.tools.FileToolSet
 import ai.kermes.tools.WebSearchToolSet
+import ai.koog.agents.core.agent.GraphAIAgent
+import ai.koog.prompt.executor.model.PromptExecutor
+import ai.koog.prompt.llm.LLModel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
 import org.slf4j.LoggerFactory
 import java.nio.file.Paths
@@ -43,6 +49,7 @@ fun main(args: Array<String>) = runBlocking {
             Cli.Command.Status -> Cli.runStatus()
             Cli.Command.Update -> Cli.runUpdate()
             is Cli.Command.Mcp -> McpDebugServer.serve(cmd.port)
+            Cli.Command.Serve -> runServe()
             is Cli.Command.Chat -> runChat(cmd.query)
         }
     } catch (e: KermesConfigError) {
@@ -76,22 +83,7 @@ private suspend fun runChat(oneShot: String?) {
 
     log.info("starting Kermes baseUrl={} model={}", config.baseUrl, config.modelId)
 
-    // ---- Koog primitives -------------------------------------------------
-    val executor = KoogWiring.buildPromptExecutor(config.apiKey, config.baseUrl)
-    val model = KoogWiring.resolveModel(config.apiKey, config.baseUrl, config.modelId)
-    val vectors = KoogWiring.buildVectorStore(
-        apiKey = config.apiKey,
-        baseUrl = config.baseUrl,
-        storageRoot = config.vectorsRoot,
-    )
-
-    // ---- Memory layer ----------------------------------------------------
-    val memory = MemoryStore(config.memoryRoot, vectors)
-
-    // ---- Skill registry (roots already scoped + ordered by Config) -------
-    val skillRegistry = SkillRegistry(config.skillsRoots)
-
-    // ---- Permissions -----------------------------------------------------
+    // ---- Permissions: interactive console prompts for the TUI ------------
     val permissionGuard = PermissionGuard(
         PermissionGuard.Config(
             prompt = { tool, args -> ConsoleApprover.ask(tool, args) },
@@ -99,34 +91,14 @@ private suspend fun runChat(oneShot: String?) {
         )
     )
 
-    // ---- Tool sets (side-effecting ones get the permission gate) ----------
-    val skillTools = SkillsToolSet(skillRegistry, config.agentCreatedSkillsRoot, permissionGuard)
-    val learnerTools = LearnerToolSet(memory, vectors)
-    val workdir = Paths.get(System.getProperty("user.dir"))
-    val bashTools = BashToolSet(
-        workdir = workdir,
-        permissionGuard = permissionGuard,
-    )
-    val webTools = WebSearchToolSet()
-    val fileTools = FileToolSet(baseDir = workdir, permissionGuard = permissionGuard)
-
-    // ---- System-prompt context: skill manifest + eager memory ------------
-    val skillManifest = skillRegistry.discoveryManifest()
-    val eagerMemory = buildEagerMemory(memory)
-
-    // ---- Build the agent -------------------------------------------------
-    val agent = KoogAgentFactory.build(
-        promptExecutor = executor,
-        model = model,
-        config = config,
-        skillTools = skillTools,
-        learnerTools = learnerTools,
-        bashTools = bashTools,
-        webTools = webTools,
-        fileTools = fileTools,
-        skillManifest = skillManifest,
-        eagerMemory = eagerMemory,
-    )
+    // ---- Agent stack (Koog primitives + tools + memory + skills) ---------
+    val stack = buildAgentStack(config, permissionGuard)
+    val agent = stack.agent
+    val memory = stack.memory
+    val vectors = stack.vectors
+    val skillRegistry = stack.skillRegistry
+    val executor = stack.executor
+    val model = stack.model
 
     // ---- One-shot mode: run once, print, exit (no scheduler/REPL) --------
     if (oneShot != null) {
@@ -213,6 +185,139 @@ private suspend fun runChat(oneShot: String?) {
     scheduler?.close()
     vectors.flush()
     println("bye.")
+}
+
+/**
+ * The full agent stack shared by every entry point (TUI, one-shot, serve):
+ * Koog executor/model, the file-backed vector store, memory, skills, and the
+ * tool-equipped [GraphAIAgent]. Only the permission policy differs per channel,
+ * so it's passed in.
+ */
+private class AgentStack(
+    val agent: GraphAIAgent<String, String>,
+    val memory: MemoryStore,
+    val vectors: KoogVectorStore,
+    val skillRegistry: SkillRegistry,
+    val executor: PromptExecutor,
+    val model: LLModel,
+)
+
+private suspend fun buildAgentStack(config: KermesConfig, permissionGuard: PermissionGuard): AgentStack {
+    val executor = KoogWiring.buildPromptExecutor(config.apiKey, config.baseUrl)
+    val model = KoogWiring.resolveModel(config.apiKey, config.baseUrl, config.modelId)
+    val vectors = KoogWiring.buildVectorStore(
+        apiKey = config.apiKey,
+        baseUrl = config.baseUrl,
+        storageRoot = config.vectorsRoot,
+    )
+    val memory = MemoryStore(config.memoryRoot, vectors)
+    val skillRegistry = SkillRegistry(config.skillsRoots)
+
+    val skillTools = SkillsToolSet(skillRegistry, config.agentCreatedSkillsRoot, permissionGuard)
+    val learnerTools = LearnerToolSet(memory, vectors)
+    val workdir = Paths.get(System.getProperty("user.dir"))
+    val bashTools = BashToolSet(workdir = workdir, permissionGuard = permissionGuard)
+    val webTools = WebSearchToolSet()
+    val fileTools = FileToolSet(baseDir = workdir, permissionGuard = permissionGuard)
+
+    val agent = KoogAgentFactory.build(
+        promptExecutor = executor,
+        model = model,
+        config = config,
+        skillTools = skillTools,
+        learnerTools = learnerTools,
+        bashTools = bashTools,
+        webTools = webTools,
+        fileTools = fileTools,
+        skillManifest = skillRegistry.discoveryManifest(),
+        eagerMemory = buildEagerMemory(memory),
+    )
+    return AgentStack(agent, memory, vectors, skillRegistry, executor, model)
+}
+
+/**
+ * Headless daemon: `kermes serve`. No TUI. Hosts the scheduler and the inbound
+ * Telegram gateway in one long-running process — the missing piece that lets
+ * you drive the agent from Telegram (the bot was outbound-only before).
+ *
+ * Permission policy for a remote channel can't pop an interactive [y/n], so by
+ * default any tool needing approval is DENIED (the model adapts). Set
+ * KERMES_REMOTE_AUTO_APPROVE=true to trust your allow-listed chat with full
+ * tool access.
+ */
+private suspend fun runServe() = coroutineScope {
+    val log = LoggerFactory.getLogger("ai.kermes.app.Serve")
+    val config = KermesConfig.load()
+    setupDirs(config)
+
+    val tgToken = ConfigSource.get("KERMES_TELEGRAM_BOT_TOKEN")
+    val tgChat = ConfigSource.get("KERMES_TELEGRAM_CHAT_ID")
+    if (tgToken.isNullOrBlank()) {
+        System.err.println(
+            "  ${Banner.RED}✗${Banner.RESET} No Telegram bot configured. " +
+                "Run ${Banner.GOLD}kermes setup${Banner.RESET} and add a bot token + chat id, then retry."
+        )
+        return@coroutineScope
+    }
+
+    val autoApprove = ConfigSource.get("KERMES_REMOTE_AUTO_APPROVE")?.lowercase() == "true"
+    val permissionGuard = PermissionGuard(
+        PermissionGuard.Config(
+            prompt = { _, _ ->
+                if (autoApprove) PermissionGuard.PromptResponse.AllowSession
+                else PermissionGuard.PromptResponse.Deny
+            },
+            dangerouslySkipAll = config.dangerouslySkipPermissions,
+        )
+    )
+
+    log.info("starting Kermes serve baseUrl={} model={}", config.baseUrl, config.modelId)
+    val stack = buildAgentStack(config, permissionGuard)
+
+    // Scheduler — same wiring as the REPL, just hosted here permanently.
+    val entries = ScheduleStore(config.schedulesFile).load()
+    val scheduler = if (entries.isNotEmpty()) {
+        val sinks = buildMap<String, ai.kermes.schedule.DeliverySink> {
+            put("inbox", InboxFileSink(config.inboxRoot))
+            if (!tgChat.isNullOrBlank()) put("telegram", ai.kermes.schedule.TelegramSink(tgToken, tgChat))
+        }
+        Scheduler(
+            agentRunner = { entry -> stack.agent.run(entry.prompt, "schedule-${entry.id}") },
+            sink = CompositeSink(sinks),
+        ).also { it.start(entries); log.info("scheduler started with {} schedule(s)", entries.size) }
+    } else null
+
+    // Inbound Telegram gateway: only the configured chat id may drive the agent.
+    val allowed = tgChat?.toLongOrNull()?.let { setOf(it) } ?: emptySet()
+    val gateway = TelegramGateway(
+        botToken = tgToken,
+        allowedChatIds = allowed,
+        onMessage = { chatId, text -> stack.agent.run(text, "telegram-$chatId") },
+    )
+    val botName = gateway.whoAmI()
+
+    Runtime.getRuntime().addShutdownHook(Thread {
+        scheduler?.close()
+        runCatching { runBlocking { stack.vectors.flush() } }
+    })
+
+    print(
+        Banner.render(
+            version = KERMES_VERSION,
+            model = config.modelId,
+            cwd = kermesHome().toString(),
+            skills = stack.skillRegistry.all().map { it.frontmatter.name },
+        )
+    )
+    println("  ${Banner.GOLD}serve${Banner.RESET} — headless gateway running ${Banner.DIM}(Ctrl-C to stop)${Banner.RESET}")
+    println("  telegram bot:  ${botName?.let { "@$it" } ?: "${Banner.RED}unreachable right now${Banner.RESET} ${Banner.DIM}(network/TLS flaky — will keep retrying)${Banner.RESET}"}")
+    println("  allow-list:    ${if (allowed.isEmpty()) "${Banner.RED}ANY chat (no chat id set)${Banner.RESET}" else allowed.joinToString()}")
+    println("  scheduler:     ${entries.size} schedule(s)")
+    println("  tool approval: ${if (autoApprove) "auto-approve (KERMES_REMOTE_AUTO_APPROVE)" else "deny-by-default (set KERMES_REMOTE_AUTO_APPROVE=true to allow)"}")
+    println("  message your bot on Telegram and Kermes will reply.\n")
+    log.info("telegram gateway starting (bot @{}, allow-list {})", botName ?: "?", allowed)
+
+    gateway.run() // blocks until the process is interrupted
 }
 
 /**

@@ -13,7 +13,7 @@ import kotlin.io.path.name
 import kotlin.io.path.walk
 import kotlin.io.path.writeText
 
-const val KERMES_VERSION = "0.1.12"
+const val KERMES_VERSION = "0.1.13"
 
 /**
  * Terminal command surface. Three categories:
@@ -32,6 +32,8 @@ object Cli {
         data object Update : Command
         /** Read-only MCP debug server over Streamable HTTP on [port]. */
         data class Mcp(val port: Int) : Command
+        /** Headless daemon: scheduler + inbound Telegram gateway (no TUI). */
+        data object Serve : Command
         /** query == null → interactive REPL; non-null → one-shot. */
         data class Chat(val query: String?) : Command
     }
@@ -51,6 +53,7 @@ object Cli {
         "status" -> Command.Status
         "update" -> Command.Update
         "mcp" -> Command.Mcp(parsePort(args))
+        "serve" -> Command.Serve
         "chat" -> Command.Chat(null)
         "-q", "--query" -> Command.Chat(args.drop(1).joinToString(" ").ifBlank { null })
         else -> {
@@ -81,6 +84,7 @@ object Cli {
           kermes init                Bootstrap ~/.kermes (dirs, sample skill, schedules)
           kermes status              Show config + health (no network calls)
           kermes mcp [--port N]      Start a read-only MCP debug server (default port 8765)
+          kermes serve               Run headless: scheduler + Telegram gateway (no TUI)
           kermes update              Update to the latest release (re-runs the installer)
           kermes version             Print version
           kermes help                Show this help
@@ -90,6 +94,9 @@ object Cli {
           KERMES_BASE_URL            OpenAI-compatible base URL (default: OpenRouter)
           KERMES_MODEL               Model id (default: openai/gpt-4o)
           KERMES_BUNDLED_SKILLS      Path to bundled skills (default: ./skills)
+          KERMES_TELEGRAM_BOT_TOKEN  Bot token (@BotFather) — enables `kermes serve`
+          KERMES_TELEGRAM_CHAT_ID    Your chat id — the only chat allowed to drive the agent
+          KERMES_REMOTE_AUTO_APPROVE Set true to allow tool use over Telegram (default: deny)
 
         IN-SESSION SLASH COMMANDS
           /help /skills /memory /inbox /new /model /yolo /quit
