@@ -42,6 +42,7 @@ fun main(args: Array<String>) = runBlocking {
             Cli.Command.Setup -> Cli.runSetup()
             Cli.Command.Status -> Cli.runStatus()
             Cli.Command.Update -> Cli.runUpdate()
+            is Cli.Command.Mcp -> McpDebugServer.serve(cmd.port)
             is Cli.Command.Chat -> runChat(cmd.query)
         }
     } catch (e: KermesConfigError) {

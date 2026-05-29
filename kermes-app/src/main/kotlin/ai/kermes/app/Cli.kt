@@ -13,7 +13,7 @@ import kotlin.io.path.name
 import kotlin.io.path.walk
 import kotlin.io.path.writeText
 
-const val KERMES_VERSION = "0.1.10"
+const val KERMES_VERSION = "0.1.11"
 
 /**
  * Terminal command surface. Three categories:
@@ -30,9 +30,14 @@ object Cli {
         data object Setup : Command
         data object Status : Command
         data object Update : Command
+        /** Read-only MCP debug server over Streamable HTTP on [port]. */
+        data class Mcp(val port: Int) : Command
         /** query == null → interactive REPL; non-null → one-shot. */
         data class Chat(val query: String?) : Command
     }
+
+    /** Default port for the MCP debug server (overridable via --port or KERMES_MCP_PORT). */
+    const val DEFAULT_MCP_PORT = 8765
 
     /** Canonical repo, used by `kermes update` to re-run the installer. */
     const val REPO_SLUG = "moshtaghmaveddat/kermes-agent"
@@ -45,6 +50,7 @@ object Cli {
         "setup" -> Command.Setup
         "status" -> Command.Status
         "update" -> Command.Update
+        "mcp" -> Command.Mcp(parsePort(args))
         "chat" -> Command.Chat(null)
         "-q", "--query" -> Command.Chat(args.drop(1).joinToString(" ").ifBlank { null })
         else -> {
@@ -56,6 +62,14 @@ object Cli {
 
     private fun kermesHome(): Path = ai.kermes.app.kermesHome()
 
+    /** Resolve the MCP port: `--port N` flag wins, then KERMES_MCP_PORT, else default. */
+    private fun parsePort(args: Array<String>): Int {
+        val flag = args.toList().zipWithNext()
+            .firstOrNull { (a, _) -> a == "--port" || a == "-p" }?.second?.toIntOrNull()
+        val env = System.getenv("KERMES_MCP_PORT")?.toIntOrNull()
+        return flag ?: env ?: DEFAULT_MCP_PORT
+    }
+
     fun printUsage() = println(
         """
         Kermes $KERMES_VERSION — a Kotlin/JVM agent on Koog.
@@ -66,6 +80,7 @@ object Cli {
           kermes setup               Interactive setup (LLM provider, API key, Telegram)
           kermes init                Bootstrap ~/.kermes (dirs, sample skill, schedules)
           kermes status              Show config + health (no network calls)
+          kermes mcp [--port N]      Start a read-only MCP debug server (default port 8765)
           kermes update              Update to the latest release (re-runs the installer)
           kermes version             Print version
           kermes help                Show this help
