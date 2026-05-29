@@ -58,14 +58,25 @@ object McpDebugServer {
     /** MCP protocol revision we implement; we echo the client's if it sends one. */
     private const val PROTOCOL_VERSION = "2025-06-18"
 
-    /** Start the server and block until the process is interrupted (Ctrl-C). */
-    fun serve(port: Int) {
+    /**
+     * Start the server **non-blocking** and return the handle (caller stops it).
+     * Used by `kermes serve` to host the debug endpoint alongside the gateway.
+     */
+    fun start(port: Int): HttpServer {
         val home = kermesHome()
         val server = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), port), 0)
         server.createContext("/mcp") { ex -> handle(ex, home) }
         server.createContext("/") { ex -> respond(ex, 200, "text/plain", "Kermes MCP debug server. POST JSON-RPC to /mcp\n") }
         server.executor = Executors.newFixedThreadPool(4)
         server.start()
+        log.info("MCP debug server started on http://127.0.0.1:{}/mcp", port)
+        return server
+    }
+
+    /** Start the server and block until the process is interrupted (Ctrl-C). */
+    fun serve(port: Int) {
+        val home = kermesHome()
+        val server = start(port)
 
         val url = "http://127.0.0.1:$port/mcp"
         println(Banner.render(KERMES_VERSION, model = "mcp-debug", cwd = home.toString(), skills = emptyList()))
@@ -83,7 +94,6 @@ object McpDebugServer {
         )
         println("\n  Tools: status · tail_log · recent_errors · read_config · list_skills · list_inbox · read_memory")
         println("  ${Banner.DIM}Ctrl-C to stop.${Banner.RESET}\n")
-        log.info("MCP debug server started on {}", url)
 
         val latch = CountDownLatch(1)
         Runtime.getRuntime().addShutdownHook(Thread {

@@ -49,7 +49,12 @@ fun main(args: Array<String>) = runBlocking {
             Cli.Command.Status -> Cli.runStatus()
             Cli.Command.Update -> Cli.runUpdate()
             is Cli.Command.Mcp -> McpDebugServer.serve(cmd.port)
-            Cli.Command.Serve -> runServe()
+            is Cli.Command.Serve -> when (cmd.action) {
+                Cli.ServeAction.Run -> runServe(cmd.mcpPort)
+                Cli.ServeAction.InstallService -> Cli.installService()
+                Cli.ServeAction.UninstallService -> Cli.uninstallService()
+                Cli.ServeAction.PrintService -> Cli.printServicePlist()
+            }
             is Cli.Command.Chat -> runChat(cmd.query)
         }
     } catch (e: KermesConfigError) {
@@ -245,7 +250,7 @@ private suspend fun buildAgentStack(config: KermesConfig, permissionGuard: Permi
  * KERMES_REMOTE_AUTO_APPROVE=true to trust your allow-listed chat with full
  * tool access.
  */
-private suspend fun runServe() = coroutineScope {
+private suspend fun runServe(mcpPort: Int?) = coroutineScope {
     val log = LoggerFactory.getLogger("ai.kermes.app.Serve")
     val config = KermesConfig.load()
     setupDirs(config)
@@ -296,8 +301,18 @@ private suspend fun runServe() = coroutineScope {
     )
     val botName = gateway.whoAmI()
 
+    // Debug hook: host the read-only MCP endpoint in-process so a single
+    // `kermes serve` is both the gateway AND attachable for live debugging.
+    // A port clash (e.g. a separate `kermes mcp` already bound) is non-fatal.
+    val mcpServer = mcpPort?.let { p ->
+        runCatching { McpDebugServer.start(p) }
+            .onFailure { log.warn("MCP debug endpoint not started on {}: {}", p, it.message) }
+            .getOrNull()
+    }
+
     Runtime.getRuntime().addShutdownHook(Thread {
         scheduler?.close()
+        runCatching { mcpServer?.stop(0) }
         runCatching { runBlocking { stack.vectors.flush() } }
     })
 
@@ -314,6 +329,12 @@ private suspend fun runServe() = coroutineScope {
     println("  allow-list:    ${if (allowed.isEmpty()) "${Banner.RED}ANY chat (no chat id set)${Banner.RESET}" else allowed.joinToString()}")
     println("  scheduler:     ${entries.size} schedule(s)")
     println("  tool approval: ${if (autoApprove) "auto-approve (KERMES_REMOTE_AUTO_APPROVE)" else "deny-by-default (set KERMES_REMOTE_AUTO_APPROVE=true to allow)"}")
+    val mcpLine = when {
+        mcpPort == null -> "${Banner.DIM}disabled (--no-mcp)${Banner.RESET}"
+        mcpServer != null -> "${Banner.WHITE}http://127.0.0.1:$mcpPort/mcp${Banner.RESET} ${Banner.DIM}(read-only)${Banner.RESET}"
+        else -> "${Banner.RED}port $mcpPort unavailable${Banner.RESET}"
+    }
+    println("  mcp debug:     $mcpLine")
     println("  message your bot on Telegram and Kermes will reply.\n")
     log.info("telegram gateway starting (bot @{}, allow-list {})", botName ?: "?", allowed)
 

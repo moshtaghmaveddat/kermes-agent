@@ -13,7 +13,7 @@ import kotlin.io.path.name
 import kotlin.io.path.walk
 import kotlin.io.path.writeText
 
-const val KERMES_VERSION = "0.1.14"
+const val KERMES_VERSION = "0.1.15"
 
 /**
  * Terminal command surface. Three categories:
@@ -32,11 +32,18 @@ object Cli {
         data object Update : Command
         /** Read-only MCP debug server over Streamable HTTP on [port]. */
         data class Mcp(val port: Int) : Command
-        /** Headless daemon: scheduler + inbound Telegram gateway (no TUI). */
-        data object Serve : Command
+        /**
+         * Headless daemon: scheduler + inbound Telegram gateway (no TUI).
+         * [mcpPort] null disables the in-process debug endpoint; [action] selects
+         * run vs. launchd service management.
+         */
+        data class Serve(val mcpPort: Int?, val action: ServeAction) : Command
         /** query == null → interactive REPL; non-null → one-shot. */
         data class Chat(val query: String?) : Command
     }
+
+    /** What `kermes serve` should do. */
+    enum class ServeAction { Run, InstallService, UninstallService, PrintService }
 
     /** Default port for the MCP debug server (overridable via --port or KERMES_MCP_PORT). */
     const val DEFAULT_MCP_PORT = 8765
@@ -53,7 +60,17 @@ object Cli {
         "status" -> Command.Status
         "update" -> Command.Update
         "mcp" -> Command.Mcp(parsePort(args))
-        "serve" -> Command.Serve
+        "serve" -> {
+            val action = when {
+                "--install-service" in args -> ServeAction.InstallService
+                "--uninstall-service" in args -> ServeAction.UninstallService
+                "--print-service" in args -> ServeAction.PrintService
+                else -> ServeAction.Run
+            }
+            // MCP debug endpoint on by default; --no-mcp disables it.
+            val mcpPort = if ("--no-mcp" in args) null else parsePort(args)
+            Command.Serve(mcpPort, action)
+        }
         "chat" -> Command.Chat(null)
         "-q", "--query" -> Command.Chat(args.drop(1).joinToString(" ").ifBlank { null })
         else -> {
@@ -84,7 +101,10 @@ object Cli {
           kermes init                Bootstrap ~/.kermes (dirs, sample skill, schedules)
           kermes status              Show config + health (no network calls)
           kermes mcp [--port N]      Start a read-only MCP debug server (default port 8765)
-          kermes serve               Run headless: scheduler + Telegram gateway (no TUI)
+          kermes serve [--no-mcp]    Run headless: Telegram gateway + scheduler + MCP debug
+          kermes serve --install-service     Run serve in the background via launchd (macOS)
+          kermes serve --uninstall-service   Remove the background service
+          kermes serve --print-service       Print the launchd plist (don't install)
           kermes update              Update to the latest release (re-runs the installer)
           kermes version             Print version
           kermes help                Show this help
@@ -133,6 +153,132 @@ object Cli {
         } catch (e: Exception) {
             System.err.println("Could not launch the updater (${e.message}). Update manually:\n$manual")
         }
+    }
+
+    // ---- Background service (macOS launchd) ------------------------------
+
+    private const val SERVICE_LABEL = "ai.kermes.serve"
+
+    private fun isMac(): Boolean =
+        System.getProperty("os.name").orEmpty().lowercase().contains("mac")
+
+    private fun launchAgentPlist(): Path =
+        Paths.get(System.getProperty("user.home"), "Library", "LaunchAgents", "$SERVICE_LABEL.plist")
+
+    /** Best-effort resolve the installed `kermes` launcher's absolute path. */
+    private fun resolveLauncher(): Path? {
+        listOfNotNull(
+            System.getenv("KERMES_LAUNCHER")?.let { Paths.get(it) },
+            Paths.get(System.getProperty("user.home"), ".local", "bin", "kermes"),
+        ).firstOrNull { it.exists() }?.let { return it }
+        val appDir = kermesHome().resolve("app")
+        if (appDir.exists()) return runCatching {
+            java.nio.file.Files.walk(appDir).use { s ->
+                s.filter { it.fileName?.toString() == "kermes" && it.parent?.fileName?.toString() == "bin" }
+                    .findFirst().orElse(null)
+            }
+        }.getOrNull()
+        return null
+    }
+
+    private fun servicePlist(launcher: Path): String {
+        val home = kermesHome()
+        val out = home.resolve("serve.out.log")
+        val err = home.resolve("serve.err.log")
+        return """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+            <plist version="1.0">
+            <dict>
+                <key>Label</key>
+                <string>$SERVICE_LABEL</string>
+                <key>ProgramArguments</key>
+                <array>
+                    <string>$launcher</string>
+                    <string>serve</string>
+                </array>
+                <key>EnvironmentVariables</key>
+                <dict>
+                    <key>KERMES_HOME</key>
+                    <string>$home</string>
+                </dict>
+                <key>RunAtLoad</key>
+                <true/>
+                <key>KeepAlive</key>
+                <true/>
+                <key>StandardOutPath</key>
+                <string>$out</string>
+                <key>StandardErrorPath</key>
+                <string>$err</string>
+            </dict>
+            </plist>
+        """.trimIndent()
+    }
+
+    /** Print the launchd plist to stdout without installing (for inspection). */
+    fun printServicePlist() {
+        val launcher = resolveLauncher()
+            ?: Paths.get(System.getProperty("user.home"), ".local", "bin", "kermes")
+        println(servicePlist(launcher))
+    }
+
+    /** Write + load a launchd LaunchAgent that runs `kermes serve` in the background. */
+    fun installService() {
+        if (!isMac()) {
+            System.err.println("--install-service supports macOS (launchd) only. On Linux, run `kermes serve` under systemd or tmux.")
+            return
+        }
+        val hasKey = sequenceOf("KERMES_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY")
+            .any { !ConfigSource.get(it).isNullOrBlank() }
+        val hasTg = !ConfigSource.get("KERMES_TELEGRAM_BOT_TOKEN").isNullOrBlank()
+        if (!hasKey || !hasTg) {
+            System.err.println("Run `kermes setup` first — the service needs an API key and a Telegram bot, else it would just restart-loop.")
+            return
+        }
+        val launcher = resolveLauncher() ?: run {
+            System.err.println("Couldn't find the kermes launcher (~/.local/bin/kermes). Set KERMES_LAUNCHER=/abs/path/to/kermes and retry.")
+            return
+        }
+        val plist = launchAgentPlist()
+        plist.parent.createDirectories()
+        plist.writeText(servicePlist(launcher) + "\n")
+
+        // Refresh: unload any old copy (ignore errors), then load + enable.
+        runCatching {
+            ProcessBuilder("launchctl", "unload", plist.toString())
+                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                .redirectError(ProcessBuilder.Redirect.DISCARD)
+                .start().waitFor()
+        }
+        val loaded = runCatching {
+            ProcessBuilder("launchctl", "load", "-w", plist.toString())
+                .redirectError(ProcessBuilder.Redirect.INHERIT)
+                .start().waitFor()
+        }.getOrDefault(-1)
+
+        if (loaded == 0) {
+            println("  ${Banner.GOLD}✓${Banner.RESET} Background service installed and started.")
+            println("    plist:  $plist")
+            println("    logs:   ${kermesHome().resolve("serve.out.log")}")
+            println("    stop:   ${Banner.GOLD}kermes serve --uninstall-service${Banner.RESET}")
+            println("    It auto-starts at login and restarts if it exits.")
+        } else {
+            System.err.println("Wrote $plist but `launchctl load` returned $loaded. Try:  launchctl load -w \"$plist\"")
+        }
+    }
+
+    /** Unload + delete the launchd LaunchAgent. */
+    fun uninstallService() {
+        val plist = launchAgentPlist()
+        runCatching {
+            ProcessBuilder("launchctl", "unload", plist.toString())
+                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                .redirectError(ProcessBuilder.Redirect.DISCARD)
+                .start().waitFor()
+        }
+        val removed = runCatching { java.nio.file.Files.deleteIfExists(plist) }.getOrDefault(false)
+        if (removed) println("  ${Banner.GOLD}✓${Banner.RESET} Background service removed ($plist).")
+        else println("  No service plist found at $plist.")
     }
 
     /** Bootstrap the home directory. No API key required. */
