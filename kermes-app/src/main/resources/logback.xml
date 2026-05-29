@@ -1,15 +1,18 @@
 <configuration>
-    <appender name="STDERR" class="ch.qos.logback.core.ConsoleAppender">
-        <target>System.err</target>
+    <!-- Logs go to a file, NOT the terminal, so the REPL stays clean.
+         User-facing errors are surfaced by the app itself (see Main). -->
+    <appender name="FILE" class="ch.qos.logback.core.FileAppender">
+        <file>${user.home}/.kermes/kermes.log</file>
+        <append>true</append>
         <encoder>
             <pattern>%d{HH:mm:ss.SSS} %-5level %logger{30} - %msg%n</pattern>
         </encoder>
     </appender>
 
     <root level="INFO">
-        <appender-ref ref="STDERR"/>
+        <appender-ref ref="FILE"/>
     </root>
 
-    <logger name="ai.kermes" level="DEBUG"/>
-    <logger name="ai.koog" level="INFO"/>
+    <logger name="ai.koog" level="WARN"/>
+    <logger name="ai.kermes" level="INFO"/>
 </configuration>

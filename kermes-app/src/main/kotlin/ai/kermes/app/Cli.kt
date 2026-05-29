@@ -13,7 +13,7 @@ import kotlin.io.path.name
 import kotlin.io.path.walk
 import kotlin.io.path.writeText
 
-const val KERMES_VERSION = "0.1.7"
+const val KERMES_VERSION = "0.1.8"
 
 /**
  * Terminal command surface. Three categories:

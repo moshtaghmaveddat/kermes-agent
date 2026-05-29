@@ -10,6 +10,11 @@ dependencies {
     implementation(project(":kermes-tui"))
 
     implementation(libs.kotlinx.coroutines.core)
+
+    // Provider clients: Chat-Completions for OpenRouter/custom, native for Ollama.
+    // (koog-agents bundles the OpenAI + Ollama clients; OpenRouter is separate.)
+    implementation("ai.koog:prompt-executor-openrouter-client:1.0.0")
+
     runtimeOnly(libs.logback.classic)
 
     testImplementation(libs.junit.jupiter)

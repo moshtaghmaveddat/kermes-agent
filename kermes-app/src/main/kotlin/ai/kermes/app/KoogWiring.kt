@@ -2,9 +2,12 @@ package ai.kermes.app
 
 import ai.kermes.core.vector.KoogVectorStore
 import ai.koog.embeddings.local.LLMEmbedder
+import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.executor.clients.openai.OpenAIClientSettings
 import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
 import ai.koog.prompt.executor.clients.openai.OpenAIModels
+import ai.koog.prompt.executor.clients.openrouter.OpenRouterClientSettings
+import ai.koog.prompt.executor.clients.openrouter.OpenRouterLLMClient
 import ai.koog.prompt.executor.clients.retry.RetryConfig
 import ai.koog.prompt.executor.clients.retry.RetryingLLMClient
 import ai.koog.prompt.executor.llms.MultiLLMPromptExecutor
@@ -18,20 +21,43 @@ import java.nio.file.Path
  */
 object KoogWiring {
 
-    /** Build the prompt executor: OpenAI-compatible client + retry wrapper. */
+    /**
+     * Build a provider-appropriate client from the base URL.
+     *
+     * Koog's `OpenAILLMClient` speaks the OpenAI **Responses API** (`/responses`),
+     * which only OpenAI implements. OpenRouter, Ollama, and most "OpenAI-
+     * compatible" servers only speak **Chat Completions** (`/chat/completions`) —
+     * so for everything except api.openai.com we use `OpenRouterLLMClient`
+     * (a chat-completions client) with the base URL overridden.
+     */
+    private fun buildClient(apiKey: String, baseUrl: String): LLMClient =
+        if (baseUrl.contains("api.openai.com")) {
+            OpenAILLMClient(apiKey, OpenAIClientSettings(baseUrl = baseUrl))
+        } else {
+            OpenRouterLLMClient(apiKey.ifBlank { "none" }, OpenRouterClientSettings(baseUrl = baseUrl))
+        }
+
+    /** Prompt executor: provider client wrapped in retry. */
     fun buildPromptExecutor(apiKey: String, baseUrl: String): PromptExecutor {
-        val rawClient = OpenAILLMClient(
-            apiKey = apiKey,
-            settings = OpenAIClientSettings(baseUrl = baseUrl),
-        )
-        val retrying = RetryingLLMClient(rawClient, RetryConfig.PRODUCTION)
-        return MultiLLMPromptExecutor(retrying)
+        val client = RetryingLLMClient(buildClient(apiKey, baseUrl), RetryConfig.PRODUCTION)
+        return MultiLLMPromptExecutor(client)
     }
 
     /**
-     * Build the file-backed vector store, using an [LLMEmbedder] over an
-     * OpenAI-compatible client. Embeddings model is overridable but defaults
-     * to OpenAI's text-embedding-3-small (cheap, broadly available).
+     * Build the chat model. The provider is taken from the client so it matches
+     * the executor's routing key (rather than guessing); capabilities are
+     * borrowed from a known chat model so tool-calling etc. are advertised.
+     */
+    fun resolveModel(apiKey: String, baseUrl: String, id: String): LLModel {
+        val provider = buildClient(apiKey, baseUrl).llmProvider()
+        return LLModel(provider, id, OpenAIModels.Chat.GPT4o.capabilities)
+    }
+
+    /**
+     * File-backed vector store, embedding via the same provider client.
+     * Default embeddings model is OpenAI's text-embedding-3-small (works on
+     * OpenAI + OpenRouter). Local Ollama embeddings need a local embed model —
+     * a separate concern from chat.
      */
     fun buildVectorStore(
         apiKey: String,
@@ -39,21 +65,7 @@ object KoogWiring {
         storageRoot: Path,
         embeddingsModel: LLModel = OpenAIModels.Embeddings.TextEmbedding3Small,
     ): KoogVectorStore {
-        val embeddingClient = OpenAILLMClient(
-            apiKey = apiKey,
-            settings = OpenAIClientSettings(baseUrl = baseUrl),
-        )
-        val embedder = LLMEmbedder(embeddingClient, embeddingsModel)
+        val embedder = LLMEmbedder(buildClient(apiKey, baseUrl), embeddingsModel)
         return KoogVectorStore(embedder, storageRoot)
-    }
-
-    /** Resolve a model ID string to a Koog [LLModel]. Falls back to GPT-4o. */
-    fun resolveModel(id: String): LLModel = when (id.lowercase()) {
-        "gpt-4o", "openai/gpt-4o" -> OpenAIModels.Chat.GPT4o
-        "gpt-4o-mini", "openai/gpt-4o-mini" -> OpenAIModels.Chat.GPT4oMini
-        "gpt-4.1", "openai/gpt-4.1" -> OpenAIModels.Chat.GPT4_1
-        "gpt-5", "openai/gpt-5" -> OpenAIModels.Chat.GPT5
-        "gpt-5-mini", "openai/gpt-5-mini" -> OpenAIModels.Chat.GPT5Mini
-        else -> OpenAIModels.Chat.GPT4o
     }
 }

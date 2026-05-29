@@ -77,7 +77,7 @@ private suspend fun runChat(oneShot: String?) {
 
     // ---- Koog primitives -------------------------------------------------
     val executor = KoogWiring.buildPromptExecutor(config.apiKey, config.baseUrl)
-    val model = KoogWiring.resolveModel(config.modelId)
+    val model = KoogWiring.resolveModel(config.apiKey, config.baseUrl, config.modelId)
     val vectors = KoogWiring.buildVectorStore(
         apiKey = config.apiKey,
         baseUrl = config.baseUrl,
@@ -196,8 +196,11 @@ private suspend fun runChat(oneShot: String?) {
             transcript.append("User: ").append(line).append('\n')
                 .append("Assistant: ").append(response).append("\n\n")
         } catch (e: Exception) {
-            log.error("agent run failed", e)
-            println("ERROR: ${e.message}")
+            log.error("agent run failed", e)   // full detail → ~/.kermes/kermes.log
+            val short = e.message?.lineSequence()?.firstOrNull { it.isNotBlank() }?.take(200)
+                ?: (e::class.simpleName ?: "unknown error")
+            println("  ${Banner.RED}✗${Banner.RESET} $short")
+            println("  ${Banner.DIM}details in ~/.kermes/kermes.log${Banner.RESET}")
         }
     }
 
