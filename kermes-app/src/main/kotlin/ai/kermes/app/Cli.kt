@@ -13,7 +13,7 @@ import kotlin.io.path.name
 import kotlin.io.path.walk
 import kotlin.io.path.writeText
 
-const val KERMES_VERSION = "0.1.4"
+const val KERMES_VERSION = "0.1.5"
 
 /**
  * Terminal command surface. Three categories:
@@ -156,16 +156,15 @@ object Cli {
 
         val tty = openTty()
         fun ask(prompt: String, default: String? = null, secret: Boolean = false): String {
-            val suffix = if (default != null) " [$default]" else ""
-            print("$prompt$suffix: ")
+            val suffix = if (default != null) " ${Banner.DIM}(Enter = $default)${Banner.RESET}" else ""
+            print("  $prompt$suffix: ")
             System.out.flush()
             val raw = if (secret) readSecret(tty) else (tty?.readLine() ?: readlnOrNull())
             val v = raw?.trim().orEmpty()
             return v.ifEmpty { default ?: "" }
         }
 
-        println("\n── Kermes setup ─────────────────────────────")
-        println("Configure your LLM provider. Press Enter to accept [defaults].\n")
+        println("\n── Kermes setup ─────────────────────────────\n")
 
         val providers = listOf(
             "openrouter" to "OpenAI-compatible router · many models (recommended)",
@@ -176,16 +175,22 @@ object Cli {
         val pick = arrowMenu("Select your LLM provider", providers)
         val provider = if (pick >= 0) providers[pick].first
                        else ask("Provider (openrouter / openai / ollama / custom)", "openrouter").lowercase()
+        println("  ${Banner.GOLD}✓${Banner.RESET} Provider: ${Banner.WHITE}$provider${Banner.RESET}\n")
+
         val (defBase, defModel) = when (provider) {
             "openai" -> "https://api.openai.com/v1" to "gpt-4o"
             "ollama" -> "http://localhost:11434/v1" to "llama3.1"
             "custom" -> "" to "gpt-4o"
-            else -> "https://openrouter.ai/api/v1" to "openai/gpt-4o"
+            else     -> "https://openrouter.ai/api/v1" to "openai/gpt-4o"
         }
-        val baseUrl = ask("Base URL", defBase)
-        val model = ask("Model id", defModel)
-        val apiKey = if (provider == "ollama") ask("API key (blank for local Ollama)", "ollama")
+
+        // Base URL is fixed by the provider — only ask when it's `custom`.
+        val baseUrl = if (provider == "custom") ask("Base URL", defBase.ifBlank { null }) else defBase
+        val model = ask("Model", defModel)
+        val apiKey = if (provider == "ollama") ask("API key (Enter to skip — local Ollama needs none)", "ollama")
                      else ask("API key", secret = true)
+        if (apiKey.isNotBlank() && provider != "ollama")
+            println("  ${Banner.GOLD}✓${Banner.RESET} API key saved.")
 
         print("\nSet up Telegram delivery for scheduled tasks? (y/N): ")
         val wantTg = (tty?.readLine() ?: readlnOrNull())?.trim()?.lowercase() == "y"
@@ -210,10 +215,16 @@ object Cli {
         // tighten perms — the file holds an API key
         runCatching { ConfigSource.configFile.toFile().setReadable(false, false); ConfigSource.configFile.toFile().setReadable(true, true) }
 
-        println("\nSaved → ${ConfigSource.configFile}")
-        if (apiKey.isBlank()) println("(no API key entered — set KERMES_API_KEY or re-run setup before chatting)")
-        if (wantTg) println("Telegram: scheduled tasks with `deliver: telegram` will post to chat $tgChat.")
-        println("\nRun `kermes` to start.")
+        println()
+        println("  ${Banner.GOLD}Configured${Banner.RESET}  ${Banner.DIM}→ ${ConfigSource.configFile}${Banner.RESET}")
+        println("    provider   ${Banner.WHITE}$provider${Banner.RESET}")
+        println("    model      ${Banner.WHITE}$model${Banner.RESET}")
+        println("    base URL   ${Banner.WHITE}$baseUrl${Banner.RESET}")
+        println("    API key    ${if (apiKey.isNotBlank()) "${Banner.GOLD}set${Banner.RESET}" else "${Banner.RED}— none${Banner.RESET}"}")
+        if (wantTg) println("    telegram   ${Banner.WHITE}chat $tgChat${Banner.RESET}")
+        if (apiKey.isBlank())
+            println("\n  ${Banner.RED}!${Banner.RESET} No API key — set KERMES_API_KEY or re-run `kermes setup` before chatting.")
+        println("\n  Run ${Banner.GOLD}kermes${Banner.RESET} to start.")
     }
 
     private fun openTty(): java.io.BufferedReader? = runCatching {
